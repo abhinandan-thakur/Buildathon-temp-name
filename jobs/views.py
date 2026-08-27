@@ -16,34 +16,47 @@ logger = logging.getLogger(__name__)
 
 class JobView(APIView):
     def post(self, request):
-        start = time.perf_counter()
+        # ? what does this do a counter of the starting time? why?
+        # start = time.perf_counter()
 
+        # ? serializer does it serialize the input request json into a serializer pyobject?
+        # * JobSerializer describes what data you're expecting and how it should be validated.
         serializer = JobSerializer(data=request.data)
+        # * This actually validates it.
         serializer.is_valid(raise_exception=True)
 
-        validation_end = time.perf_counter()
+        # ? why are we storing another time here? no idea...
+        # validation_end = time.perf_counter()
 
-        uploaded_file = serializer.validated_data["file"]
+        # ? uploadaed file? meaning? what does this code do?
+        bankFile = serializer.validated_data["bank_file"]
+        # bankFileName = serializer.validated_data["bank_filename"]
+        ledgerFile = serializer.validated_data["ledger_file"]
+        # ledgerFileName = serializer.validated_data["ledger_filename"]
 
+        # ? does this create a job for async file upload?  I am so confusd... 
+        # * This is where you actually create a database record.
         job = Job.objects.create(
-            file=uploaded_file,
-            filename=uploaded_file.name,
+            bank_file=bankFile,
+            bank_filename=bankFile.name,
+            ledger_file=ledgerFile,
+            ledger_filename=ledgerFile.name,
             status="pending"
         )
 
-        db_end = time.perf_counter()
+        # Anothr time feeling like some left up cleanup job this now...
+        # db_end = time.perf_counter()
 
+        # * this hands off the work to CELERY 
+        # COMMENT THIS TEMP
+        # we need to check if the endpoint is working right or not
+        # TODO we need to make this celery worker work
         process_job.delay(job.id)
 
-        celery_end = time.perf_counter()
+        # ;(
+        # celery_end = time.perf_counter()
 
-        return Response(
-            {
-                "job_id": job.id,
-                "status": "pending"
-            },
-            status=202
-        )
+        return Response({"job_id": job.id, "status": "pending"}, status=202)
 
 class JobListView(APIView):
     def get(self, request):
@@ -65,10 +78,12 @@ class JobListView(APIView):
         jobs = queryset.values(
             "id",
             "status",
-            "filename",
-            "row_count_clean",
-            "row_count_raw",
-            "created_at"
+            "bank_filename",
+            "ledger_filename",
+            "row_count_bank",
+            "row_count_ledger",
+            "match_rate",
+            "created_at",
         )[start:end]
 
         return Response({
