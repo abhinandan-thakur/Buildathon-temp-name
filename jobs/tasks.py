@@ -1,7 +1,8 @@
 from celery import shared_task
 
 from .models import Job
-from .services import TransactionProcessor
+# from .services import TransactionProcessor
+from .services import ReconciliationEngine
 
 @shared_task(bind=True, autoretry_for=(Exception,),retry_backoff=True,retry_kwargs={"max_retries":3})
 def process_job(self, job_id):
@@ -11,9 +12,10 @@ def process_job(self, job_id):
         job.status = "processing"
         job.save()
 
-        processor = TransactionProcessor()
+        # processor = TransactionProcessor()
+        processor = ReconciliationEngine()
 
-        results = processor.process(job.file)
+        results = processor.process(job.bank_file, job.ledger_file)
 
         job.results = results
 
