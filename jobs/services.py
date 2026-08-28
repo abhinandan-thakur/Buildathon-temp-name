@@ -1,13 +1,10 @@
 """
 ReconciliationEngine — replaces the old TransactionProcessor.
 
-The conceptual shift from your old code:
-    OLD: one CSV in -> clean it -> flag anomalies -> categorize with an LLM -> summarize.
-         This is a per-row CLASSIFICATION problem.
-    NEW: two CSVs in (bank, ledger) -> clean both -> MATCH rows across the two files
-         -> whatever doesn't match becomes an "exception" -> summarize match rate.
-         This is a cross-referencing / MATCHING problem, which is a different shape
-         of algorithm even though a lot of the cleaning code looks similar.
+two CSVs in (bank, ledger) -> clean both -> MATCH rows across the two files
+-> whatever doesn't match becomes an "exception" -> summarize match rate.
+This is a cross-referencing / MATCHING problem, which is a different shape
+of algorithm even though a lot of the cleaning code looks similar.
 
 Pipeline, top to bottom:
     1. load_csv()          - read each file into a DataFrame
@@ -318,7 +315,7 @@ class ReconciliationEngine:
             amount_maxi = max(target_amount, bank_row['amount'])
             amount_percentage = amount_diff/amount_maxi*100;
         
-            if amount_percentage <= self.AMOUNT_TOLERANCE_ABS:
+            if amount_percentage <= self.AMOUNT_TOLERANCE_PERCENTAGE:
                 return b_idx
         return None
 

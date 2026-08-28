@@ -84,6 +84,7 @@ class JobListView(APIView):
             "row_count_ledger",
             "match_rate",
             "created_at",
+            "error",
         )[start:end]
 
         return Response({
@@ -101,4 +102,4 @@ class JobStatusView(APIView):
 class JobResultView(APIView):
     def get(self, request, job_id):
         job = get_object_or_404(Job, id=job_id)
-        return Response({"id": job.id, "result": job.results},200)
+        return Response({"id": job.id, "result": job.results, "error": job.error},200)

@@ -2,7 +2,9 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 
 const BASE_URL = __ENV.BASE_URL || 'web';
-const csvFile = open('./transactions.csv', 'b');
+const bank_csvFile = open('bank_statement.csv', 'b');
+const ledger_csvFile = open('ledger.csv', 'b');
+
 
 export const options = {
     stages: [
@@ -17,10 +19,7 @@ export const options = {
     ],
     thresholds: {
         http_req_failed: ['rate<0.10'],
-        http_req_duration: [
-            'p(95)<1000',
-            'p(99)<3000',
-        ],
+        http_req_duration: ['p(95)<1000', 'p(99)<3000',],
     },
 };
 
@@ -28,7 +27,8 @@ export default function () {
     const uploadResponse = http.post(
         `http://${BASE_URL}:8001/jobs/upload/`,
         {
-            file: http.file(csvFile, 'transactions.csv'),
+            bank_file: http.file(bank_csvFile, 'tests/bank_statement.csv'),
+            ledger_file: http.file(ledger_csvFile, 'tests/ledger.csv')
         }
     );
 

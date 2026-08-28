@@ -13,6 +13,10 @@ class Job(models.Model):
     created_at=models.DateTimeField(auto_now_add=True)
     completed_at=models.DateTimeField(null=True, blank=True)
 
+    row_count_bank = models.IntegerField(default=0)
+    row_count_ledger = models.IntegerField(default=0)
+    match_rate = models.FloatField(null=True, blank=True)
+
     # error is an important field since we can't return errors
     error=models.CharField(null=True, blank=True)
     status=models.CharField(max_length=40)
