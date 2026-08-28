@@ -8,18 +8,21 @@ const ledger_csvFile = open('ledger.csv', 'b');
 
 export const options = {
     stages: [
-        { duration: '30s', target: 50 },
-        { duration: '30s', target: 100 },
-        { duration: '30s', target: 200 },
-        { duration: '30s', target: 400 },
-        { duration: '30s', target: 600 },
-        { duration: '60s', target: 800 },
-        { duration: '60s', target: 1000 },
+        { duration: '90s', target: 500 },
+        { duration: '30s', target: 700 },
+        { duration: '30s', target: 900 },
+        { duration: '30s', target: 1200 },
+        { duration: '30s', target: 1500 },
+        { duration: '30s', target: 1800 },
+
 
     ],
     thresholds: {
         http_req_failed: ['rate<0.10'],
-        http_req_duration: ['p(95)<1000', 'p(99)<3000',],
+        'http_req_duration{endpoint:upload}': ['p(95)<1000', 'p(99)<3000'],
+        'http_req_duration{endpoint:Get by Job ID}': ['p(95)<500', 'p(99)<3000'],
+        'http_req_duration{endpoint:Get Result}': ['p(95)<1000', 'p(99)<3000'],
+        'http_req_duration{endpoint:Get All Jobs}': ['p(95)<500', 'p(99)<3000'],
     },
 };
 
@@ -29,6 +32,9 @@ export default function () {
         {
             bank_file: http.file(bank_csvFile, 'tests/bank_statement.csv'),
             ledger_file: http.file(ledger_csvFile, 'tests/ledger.csv')
+        },
+        {
+            tags: { endpoint:'upload',},
         }
     );
 
@@ -46,7 +52,10 @@ export default function () {
     sleep(Math.random() * 4 + 1);
 
     const statusResponse = http.get(
-        `http://${BASE_URL}:8001/jobs/${jobId}/status/`
+        `http://${BASE_URL}:8001/jobs/${jobId}/status/`,
+        {
+            tags: { endpoint:'Get by Job ID',},
+        }
     );
 
     check(statusResponse, {
@@ -56,7 +65,10 @@ export default function () {
     sleep(Math.random() * 4 + 1);
 
     const jobsResponse = http.get(
-        `http://${BASE_URL}:8001/jobs/`
+        `http://${BASE_URL}:8001/jobs/`,
+            {
+            tags: { endpoint:'Get All Jobs',},
+        }
     );
 
     check(jobsResponse, {
@@ -66,7 +78,10 @@ export default function () {
     sleep(Math.random() * 4 + 1);
 
     const resultResponse = http.get(
-        `http://${BASE_URL}:8001/jobs/${jobId}/result/`
+        `http://${BASE_URL}:8001/jobs/${jobId}/result/`,
+        {
+            tags: { endpoint:'Get Result',},
+        }
     );
 
     check(resultResponse, {
