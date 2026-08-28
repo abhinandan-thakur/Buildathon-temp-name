@@ -24,9 +24,9 @@ cd AI_transaction_processing_pipeline
 
 ### Configure Environment Variables
 
-Create a `.env and .env.docekr` file in the project root:
+Create a `.env.local and .env.docekr` file in the project root:
 
-a .env.example is provided in the project
+a .env.local.example is provided in the project
 
 ```env
 DB_NAME=postgres

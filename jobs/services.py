@@ -32,7 +32,6 @@ import json
 import logging
 import itertools
 from difflib import SequenceMatcher
-
 import pandas as pd
 from dotenv import load_dotenv
 from groq import Groq
@@ -44,19 +43,11 @@ logger = logging.getLogger(__name__)
 
 class ReconciliationEngine:
 
-    # --- tunable matching policy -------------------------------------------------
-    # How many days apart can two records be and still be considered "the same
-    # event"? Real settlement delays (weekends, bank processing) mean this can't
-    # be 0. Widen/narrow this based on what your real data looks like.
-    DATE_TOLERANCE_DAYS = 5
+    DATE_TOLERANCE_DAYS = 7
 
-    # difflib's SequenceMatcher.ratio() returns 0..1. Above this, we treat two
-    # counterparty names as "probably the same entity" even if the exact strings
-    # differ ("Acme Vendors" vs "ACME VENDORS PVT LTD").
-    NAME_SIMILARITY_THRESHOLD = 0.55
-
-    # Absolute rupee tolerance for "close enough" amounts (bank fees, rounding).
-    AMOUNT_TOLERANCE_ABS = 5.00
+    NAME_SIMILARITY_THRESHOLD = 0.45
+    # AMOUNT_TOLERANCE_ABS = 50.00
+    AMOUNT_TOLERANCE_PERCENTAGE = 5.00
 
     # When looking for split/combined transactions, how many bank (or ledger) rows
     # are we willing to sum together to explain one row on the other side? Keep
@@ -65,26 +56,17 @@ class ReconciliationEngine:
 
     # Common legal-entity suffixes that add noise to name matching without adding
     # information ("Acme Vendors" and "Acme Vendors Pvt Ltd" are the same vendor).
-    NAME_SUFFIXES_TO_STRIP = [
-        "PVT", "LTD", "LIMITED", "LLC", "INC", "PRIVATE", "CO", "COMPANY", "CORP", "CORPORATION",
-    ]
+    NAME_SUFFIXES_TO_STRIP = ["PVT", "LTD", "LIMITED", "LLC", "INC", "PRIVATE", "CO", "COMPANY", "CORP", "CORPORATION",]
 
-    # ==========================================================================
-    # Entry point
-    # ==========================================================================
     def process(self, bank_file, ledger_file):
         # * loading both ledger_file and bank_file
         ledger_df = self.load_csv(ledger_file)
         bank_df = self.load_csv(bank_file)
-
         ledger_df = self.clean_ledger(ledger_df)
         bank_df = self.clean_bank(bank_df)
 
         matches, ledger_exceptions, bank_exceptions = self.match(ledger_df, bank_df)
-
-        summary = self.build_summary(
-            ledger_df, bank_df, matches, ledger_exceptions, bank_exceptions
-        )
+        summary = self.build_summary(ledger_df, bank_df, matches, ledger_exceptions, bank_exceptions)
 
         return {
             "summary": summary,
@@ -95,20 +77,11 @@ class ReconciliationEngine:
             "row_count_bank": len(bank_df),
         }
 
-    # ==========================================================================
-    # Loading
-    # ==========================================================================
     def load_csv(self, file):
         # * to set the cursor to the start of the file and start, without this there can be partial reads
         file.seek(0)
         return pd.read_csv(file)
 
-    # ==========================================================================
-    # Cleaning — separate methods for ledger vs bank because their raw column
-    # names/shapes are genuinely different (this is realistic: your internal
-    # system and your bank's statement export were never designed to match each
-    # other column-for-column).
-    # ==========================================================================
     def clean_ledger(self, df):
         df = df.copy()
         df['date'] = pd.to_datetime(df['date'], format='mixed').dt.date
@@ -153,9 +126,6 @@ class ReconciliationEngine:
         # ? and how does it even work?
         return SequenceMatcher(None, name_a, name_b).ratio()
 
-    # ==========================================================================
-    # Matching — the core reconciliation logic
-    # ==========================================================================
     def match(self, ledger_df, bank_df):
         matched_bank_idx = set()
         # ? set()? is used to have a set in python?
@@ -266,10 +236,12 @@ class ReconciliationEngine:
                 continue
 
             amount_diff = abs(ledger_row['amount'] - bank_row['amount'])
-            # TODO check )name_similarity()
+            amount_maxi = max(ledger_row['amount'], bank_row['amount'])
+            amount_percentage = amount_diff/amount_maxi*100;
+            # TODO check name_similarity()
             name_sim = self._name_similarity(ledger_row['normalized_name'], bank_row['normalized_name'])
 
-            amount_ok = amount_diff <= self.AMOUNT_TOLERANCE_ABS
+            amount_ok = amount_percentage <= self.AMOUNT_TOLERANCE_PERCENTAGE
             name_ok = name_sim >= self.NAME_SIMILARITY_THRESHOLD
 
             # Currency is checked but NOT used to exclude a candidate — a currency
@@ -319,7 +291,11 @@ class ReconciliationEngine:
         for combo_size in range(2, self.MAX_COMBINATION_SIZE + 1):
             for combo in itertools.combinations(pool, combo_size):
                 combo_sum = candidate_df.loc[list(combo), 'amount'].sum()
-                if abs(combo_sum - target_amount) <= self.AMOUNT_TOLERANCE_ABS:
+                amount_diff = abs(combo_sum - target_amount)
+                amount_maxi = max(combo_sum, target_amount)
+                amount_percentage = amount_diff/amount_maxi*100;
+
+                if amount_percentage <= self.AMOUNT_TOLERANCE_PERCENTAGE:
                     return list(combo), {
                         "match_type": "split",
                         "bank_row_count": combo_size,
@@ -337,13 +313,15 @@ class ReconciliationEngine:
                 continue
             if self._name_similarity(bank_row['normalized_name'], target_name) < self.NAME_SIMILARITY_THRESHOLD:
                 continue
-            if abs(bank_row['amount'] - target_amount) <= self.AMOUNT_TOLERANCE_ABS:
+           
+            amount_diff = abs(target_amount - bank_row['amount'])
+            amount_maxi = max(target_amount, bank_row['amount'])
+            amount_percentage = amount_diff/amount_maxi*100;
+        
+            if amount_percentage <= self.AMOUNT_TOLERANCE_ABS:
                 return b_idx
         return None
 
-    # ==========================================================================
-    # Record builders — shape the output JSON consistently
-    # ==========================================================================
     def _build_match_record(self, ledger_row, bank_rows, meta):
         discrepancies = []
         if meta.get("date_diff_days", 0) > 0:
@@ -406,9 +384,6 @@ class ReconciliationEngine:
             "reason": reason,
         }
 
-    # ==========================================================================
-    # Summary + LLM narrative
-    # ==========================================================================
     def build_summary(self, ledger_df, bank_df, matches, ledger_exceptions, bank_exceptions):
         total_ledger = len(ledger_df)
         resolved_ledger = total_ledger - len(ledger_exceptions)
