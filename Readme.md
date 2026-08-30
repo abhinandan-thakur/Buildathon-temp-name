@@ -1,195 +1,248 @@
-# AI-Powered Transaction Processing Pipeline
+# LedgerLens AI
 
-Backend + DevOps Internship Assignment
+AI-powered financial reconciliation, anomaly detection, and reporting pipeline for bank and ledger CSV files.
 
 ## Overview
 
-This project processes raw financial transaction CSV files asynchronously using Django REST Framework, Celery, Redis, PostgreSQL, and an LLM.
+LedgerLens AI processes uploaded bank and ledger CSV files asynchronously using Django REST Framework, Celery, Redis, PostgreSQL, Nginx, and Groq. The system normalizes transaction data, matches entries across both files, identifies unresolved exceptions, and returns a structured summary with AI-generated insights.
 
-Uploaded transaction files are cleaned, analyzed for anomalies, categorized using an LLM, and summarized into a structured report that can be retrieved through polling APIs.
-
-The entire system runs using Docker Compose with a single startup command.
+This project is designed for reconciliation-heavy workflows where transaction records from different sources need to be compared, cleaned, and explained.
 
 ---
 
+## Why this project exists
 
-## Quick Setup
+Modern finance teams often work with multiple data sources that do not share the same schema, naming conventions, or date formats. This project solves that by:
 
-### Clone Repository
+- normalizing messy CSV inputs
+- reconciling bank and ledger transactions
+- detecting mismatches and anomalies
+- summarizing unresolved records
+- exposing results through asynchronous APIs
+- supporting load and stress testing in Docker
 
-```bash
-git clone <repository-url>
-cd AI_transaction_processing_pipeline
-```
-
-### Configure Environment Variables
-
-Create a `.env.local and .env.docekr` file in the project root:
-
-a .env.local.example is provided in the project
-
-```env
-DB_NAME=postgres
-DB_HOST =db
-DB_USER=user-name
-DB_PASSWORD=user-password
-DB_PORT=5432
-
-JWT_SECRET_KEY=user-secret-key
-
-GROQ_API_KEY=visit here to get a GROQ API KEY https://console.groq.com/keys
-
-CELERY_BROKER_URL=redis://redis:6379/0
-CELERY_RESULT_BACKEND=redis://redis:6379/0
-
-BASE_URL=localhost for local/ web for docker
-```
-
-### Start the Application (Docker)
-
-```bash
-docker compose up --build
-```
-
-This command starts:
-
-* Django API (served through Gunicorn)
-* PostgreSQL
-* Redis
-* Celery Worker
-
-The API will be available at:
-
-```text
-http://localhost:8001
-```
-`FOR TESTING USING k6`
-
-``` bash
-sudo docker compose --profile stresstest up --build
-```
 ---
 
-## Local Development (Without Docker)
+## Recommended project name
 
-Install dependencies:
+Suggested name: LedgerLens AI
 
-```bash
-pip install -r requirements.txt
-```
+It is short, memorable, and reflects both:
+- the financial ledger reconciliation use case
+- the AI-assisted intelligence layer
 
-Run the Django development server:
+---
 
-```bash
-python manage.py runserver 8001
-```
+<!-- ADD DESIGN IMAGE -->
+## Tech stack
 
-If running locally without Docker, ensure the following services are installed and running on your machine:
-
-* PostgreSQL
-* Redis
-* Celery Worker
-
-Start the Celery worker:
-
-```bash
-celery -A AI_transaction_processing_pipeline worker --loglevel=info
-```
-
-The Django development server is intended for local development only. Docker uses Gunicorn as the production WSGI server.
-
-
-## Tech Stack
-
-| Component          | Technology                     |
-| ------------------ | ------------------------------ |
-| Backend API        | Django REST Framework          |
-| Database           | PostgreSQL                     |
-| Task Queue         | Celery                         |
-| Message Broker     | Redis                          |
-| LLM Provider       | Groq (Llama 3.3 70B Versatile) |
-| Containerization   | Docker & Docker Compose        |
-| Application Server | Gunicorn                       |
-| Data Processing    | Pandas                         |
-| Load Testing       | k6                             |
-| Profiling          | django-silk                    |
+| Component | Technology |
+| --- | --- |
+| API Layer | Django + Django REST Framework |
+| Application Server | Gunicorn |
+| Task Queue | Celery |
+| Broker | Redis |
+| Database | PostgreSQL |
+| AI Provider | Groq |
+| Reverse Proxy | Nginx |
+| Containerization | Docker + Docker Compose |
+| Load Testing | k6 |
+| Monitoring | Prometheus + cAdvisor + Grafana |
+| Data Processing | Pandas |
 
 ---
 
 ## Architecture
-<img width="1232" height="761" alt="image" src="https://github.com/user-attachments/assets/32820a06-0a46-4c57-8a60-cf730fbb32c3" />
+
+The application follows a containerized microservice-style deployment pattern:
+
+- Nginx receives incoming HTTP traffic and forwards it to the Django app instances
+- Django serves the REST API and stores job metadata in PostgreSQL
+- Celery workers process uploaded files asynchronously
+- Redis acts as the message broker and task backend
+- Groq LLM is used to enrich summaries and classifications
+- Prometheus and Grafana monitor system behavior during testing
+
+---
+
+## Project structure
+
+```text
+.
+├── AI_transaction_processing_pipeline/
+│   ├── __init__.py
+│   ├── celery.py
+│   ├── settings.py
+│   ├── urls.py
+│   ├── asgi.py
+│   └── wsgi.py
+├── jobs/
+│   ├── models.py
+│   ├── serializers.py
+│   ├── services.py
+│   ├── tasks.py
+│   ├── urls.py
+│   └── views.py
+├── nginx/
+│   └── nginx.conf
+├── prometheus/
+│   └── prometheus.yaml
+├── tests/
+│   ├── load.js
+│   ├── stress.js
+│   ├── bank_statement.csv
+│   ├── ledger.csv
+│   └── results.md
+├── docker-compose.yml
+├── Dockerfile
+├── manage.py
+├── Readme.md
+├── requirements.txt
+└── .env.docker
+```
 
 ---
 
 ## Features
 
-### CSV Upload
+### CSV upload and job creation
 
-* Accepts transaction CSV files
-* Creates a Job record immediately
-* Queues processing asynchronously using Celery
+- accepts bank and ledger CSV files
+- creates a processing job immediately
+- stores file metadata and job status in PostgreSQL
+- queues processing through Celery
 
-### Data Cleaning
+### Data cleaning and normalization
 
-* Normalizes mixed date formats
-* Removes currency symbols from amounts
-* Converts currency values to uppercase
-* Converts transaction status values to uppercase
-* Fills missing categories with "Uncategorized"
+- normalizes mixed date formats
+- removes currency symbols and noisy text from amounts
+- standardizes currency and status values
+- cleans vendor and narration names for matching
 
-### Anomaly Detection
+### Reconciliation engine
 
-Flags transactions when:
+The project matches transactions across both files using a multi-step approach:
 
-* Amount exceeds 3× account median spending
-* Merchant is a domestic-only brand (Swiggy, Ola, IRCTC) but currency is USD
+1. exact and fuzzy name matching
+2. date and amount tolerance checks
+3. split-transaction matching
+4. combined-transaction matching
+5. unresolved rows become exceptions
 
-### LLM Classification
+### Anomaly detection
 
-Transactions with missing categories are classified into:
+The pipeline flags transactions when they appear suspicious, such as:
 
-* Food
-* Shopping
-* Travel
-* Transport
-* Utilities
-* Cash Withdrawal
-* Entertainment
-* Other
+- amount spikes compared with historical spending patterns
+- mismatched currency or geography assumptions
+- merchant inconsistency between narration and source data
 
-Classification requests are batched to minimize API calls.
+### AI-powered summaries
 
-### LLM Summary Generation
+When needed, the system uses Groq to generate:
 
-Generates:
+- narrative summary of the reconciliation result
+- total spend by currency
+- top merchants or counterparties
+- anomaly and exception explanation
+- risk or confidence signal
 
-* Total spend by currency
-* Top merchants
-* Anomaly count
-* Spending narrative
-* Risk level
+### API polling model
 
-### Retry Logic
+The API is asynchronous by design:
 
-LLM requests are retried up to 3 times using exponential backoff.
-
-Failed LLM responses do not fail the entire processing pipeline.
-
-### Pagination
-
-The Job Listing endpoint supports pagination.
-
-Example:
-
-```bash
-GET /jobs/?page=1&page_size=20
-```
+- upload returns a job ID immediately
+- caller polls status and result endpoints
+- job output is stored as structured JSON on the model
 
 ---
 
-## API Endpoints
+## Environment configuration
 
-### Upload CSV
+Create a `.env.docker` and `.env.local` file in the project root with values like:
+
+```env
+POSTGRES_DB=postgres
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
+POSTGRES_HOST=db
+POSTGRES_PORT=5432
+
+JWT_SECRET_KEY=your-secret-key
+DEBUG=False
+TESTING=False
+PROFILING=False
+
+GROQ_API_KEY=visit here to get a GROQ API KEY https://console.groq.com/keys
+
+CELERY_BROKER_URL=redis://redis:6379/0
+CELERY_RESULT_BACKEND=redis://redis:6379/0
+```
+---
+
+<!-- CHECKED -->
+## Quick start
+
+### 1. Clone the repo
+
+```bash
+git clone <repository-url>
+cd Buildathon-temp-name
+```
+
+### 2. Create environment file
+
+```bash
+cp .env.docker.example .env.docker
+```
+
+or, 
+
+```bash
+cp .env.local.example .env.docker
+```
+
+Then edit the file with your actual database and API credentials.
+
+### 3. Start the application
+
+```bash
+sudo docker compose up --build
+```
+
+This starts:
+
+- Django API (Gunicorn)
+- PostgreSQL
+- Redis
+- Celery worker
+- Nginx
+- Grafana / Prometheus / cAdvisor
+
+The application will be started
+---
+<!-- DONE -->
+## Load testing
+
+Run the stress profile:
+
+```bash
+sudo docker compose --profile stresstest up --build
+```
+
+Run the load test profile:
+
+```bash
+sudo docker compose --profile loadtest up --build
+```
+
+The k6 scripts are under [tests](tests).
+
+---
+<!-- DONE/ -->
+## API endpoints
+
+### Upload files
 
 ```http
 POST /jobs/upload/
@@ -199,8 +252,9 @@ Request:
 
 ```bash
 curl -X POST \
-  -F "file=@transactions.csv" \
-  http://localhost:8001/jobs/upload/
+  -F "bank_file=@bank_statement.csv" \
+  -F "ledger_file=@ledger.csv" \
+  http://localhost/jobs/upload/
 ```
 
 Response:
@@ -212,231 +266,68 @@ Response:
 }
 ```
 
----
-
-### Get Job Status
-
-```http
-GET /jobs/{job_id}/status/
-```
-
-Example:
-
+### List jobs
 ```bash
-curl http://localhost:8001/jobs/1/status/
+curl -i http://localhost/jobs/
 ```
 
-Response:
-
-```json
-{
-  "id": 1,
-  "status": "completed"
-}
-```
-
----
-
-### Get Job Results
-
-```http
-GET /jobs/{job_id}/result/
-```
-
-Example:
-
+### Get job status
 ```bash
-curl http://localhost:8001/jobs/1/result/
+curl -i http://localhost/jobs/25862/status/
 ```
 
-Returns:
-
-* Processed transactions
-* Anomaly list
-* Category breakdown
-* LLM generated summary
-
----
-
-### List Jobs
-
-```http
-GET /jobs/
-```
-
-Example:
-
+### Get job result
 ```bash
-curl http://localhost:8001/jobs/
+curl -i http://localhost/jobs/2862/result/
 ```
-
-Optional status filtering:
-
-```http
-GET /jobs/?status=completed
-```
-
-```bash
-curl "http://localhost:8001/jobs/?status=failed"
-```
-
-
-Pagination:
-
-```http
-GET /jobs/?page=1&page_size=20
-```
-
-Response:
-
-```json
-{
-  "count": 25,
-  "page": 1,
-  "page_size": 20,
-  "results": [...]
-}
-```
-
----
-
+<!-- DONE -->
 ## Data Model
 
 ### Job
 
 ```text
 id
-file
-filename
-status
+bank_file
+bank_filename
+ledger_file
+ledger_filername
 created_at
 completed_at
+row_count_bank
+row_count_ledger
+match_rate
 error
-row_count_raw
-row_count_clean
+status
 results (JSONField)
 ```
 
-### Design Choice
+## Production notes
 
-The assignment suggested separate Job, Transaction, and JobSummary tables.
+This setup is excellent for local testing and demonstration, but for a production-grade deployment you would likely add:
 
-For simplicity and faster development, processed transaction data, anomalies, and summaries are stored inside a JSONField on the Job model.
-
-Benefits:
-
-* Simpler schema
-* Fewer database writes
-* Faster implementation
-
-Trade-offs:
-
-* Reduced query flexibility
-* Larger database rows
-* Less suitable for large-scale analytics workloads
+- multiple Gunicorn workers behind a load balancer
+- more Celery workers
+- PostgreSQL connection pooling
+- structured logging and tracing
+- object storage for uploaded files
+- better retry and timeout policies for LLM calls
+- caching for repeated data queries
 
 ---
 
-## Load Testing
+## Result
 
-Load testing was performed using k6.
+### Stress Test
+![Stress Test Stages](stress-test-stages.png)
+![Result of Stress Test by K6](k6-stress-test-result.png)
+![Memory and CPU utilization by Stress Test](stress-test-memory-cpu-utilization.png)
 
-### Test Configuration
-
-* Ramp-up to 600 Virtual Users
-* Duration: 2.5 minutes
-* Upload, Status, Result, and Job List endpoints tested
-
-### Results
-
-## Stress Test Results (600 VUs)
-
-### Environment
-
-* Django + DRF
-* PostgreSQL 17
-* Redis 7
-* Celery
-* Docker Compose (WSL2)
-* k6 load/stress testing
-
-### Load Profile
-this is the test for my stress test profile
-![K6 stages](image.png)
-
-### Resource Usage During Test
-
-![k6 result](image-2.png)
-![Memory and CPU utilization during stress testing](image-4.png)
-
-### Key Findings
-
-1. No PostgreSQL connection exhaustion occurred.
-2. No Redis bottleneck observed.
-3. Memory usage remained stable.
-4. Celery workers remained healthy.
-5. Application remained functional up to several hundred concurrent users.
-6. First failure mode was request timeout, not process crash.
-7. Previous "too many clients already" issue was resolved.
-
-### Conclusion
-
-The system successfully handled hundreds of concurrent virtual users without database exhaustion or memory collapse.
-
-The primary bottleneck appears to be request throughput at the Django application layer, where request latency eventually exceeded k6 timeout thresholds under sustained load approaching 600 VUs.
-
-#### Stress Testing
-
-The application remained operational under heavy load but exhibited increased latency at higher virtual user counts.
-
-Observed bottlenecks:
-
-* Gunicorn worker concurrency
-* PostgreSQL connection handling
-* JSON serialization overhead
-* Single-node deployment architecture
-
----
-
-## Scalability Considerations
-
-### Current Limitations
-
-If traffic increased significantly, likely bottlenecks would include:
-
-* Gunicorn worker count
-* PostgreSQL connection limits
-* Celery worker throughput
-* JSONField growth
-* Single API instance deployment
-
-### Production Improvements
-
-Potential improvements:
-
-* Horizontal API scaling
-* Multiple Celery workers
-* PgBouncer connection pooling
-* Redis caching layer
-* Dedicated Transaction table
-* Nginx reverse proxy
-* Object storage (S3) for uploaded files
-* Monitoring and observability tooling
-
-Trade-off:
-
-Greater scalability at the cost of increased operational complexity.
-
----
-
-## Assumptions
-
-* CSV files are reasonably sized and fit into memory.
-* LLM responses return valid JSON.
-* Groq API is available during processing.
-* The application is intended for assignment evaluation and local development.
-
----
+### Load Test
+![load test stages](load-test-stages.png)
+![load test k6 resultt](image-4.png)
+![load-test-trhougput-and-VUs](image-1.png)
+![load-test-CPU-utilization-relative-to-1-core](image-2.png)
+![load-test-memory-usage](image-3.png)
 ---
 
 ## Author

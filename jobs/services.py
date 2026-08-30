@@ -37,6 +37,9 @@ from django.conf import settings
 load_dotenv()
 logger = logging.getLogger(__name__)
 
+# ! OPTIMIZE ALL OF THIS
+# ! INCREASE THROUGHPUT
+# ! PRIORITY URGENT
 
 class ReconciliationEngine:
 
@@ -49,6 +52,7 @@ class ReconciliationEngine:
     # When looking for split/combined transactions, how many bank (or ledger) rows
     # are we willing to sum together to explain one row on the other side? Keep
     # ! this small — combinatorics blow up fast, and in practice most real splits are 2-4 way.
+    # ! move this small further to 3 even 2 o(n^4) is a time bomb
     MAX_COMBINATION_SIZE = 4
 
     # Common legal-entity suffixes that add noise to name matching without adding
@@ -74,11 +78,13 @@ class ReconciliationEngine:
             "row_count_bank": len(bank_df),
         }
 
+    # ! time complexity - o(1)
     def load_csv(self, file):
         # * to set the cursor to the start of the file and start, without this there can be partial reads
         file.seek(0)
         return pd.read_csv(file)
 
+    # ! time complexity - o(1)
     def clean_ledger(self, df):
         df = df.copy()
         df['date'] = pd.to_datetime(df['date'], format='mixed').dt.date
@@ -87,6 +93,7 @@ class ReconciliationEngine:
         df['normalized_name'] = df['counterparty'].apply(self._normalize_name)
         return df
 
+    # ! time complexity - o(1)
     def clean_bank(self, df):
         df = df.copy()
         df['txn_date'] = pd.to_datetime(df['txn_date'], format='mixed').dt.date
@@ -95,10 +102,12 @@ class ReconciliationEngine:
         df['normalized_name'] = df['narration'].apply(self._normalize_name)
         return df
 
+    # ! time complexity - o(1)
     def _parse_amount(self, amount_series):
         # * Strips anything that isn't a digit or a decimal point then casts to float. 
         return (amount_series.astype(str).str.replace(r'[^\d.\-]', '', regex=True).astype(float))
 
+    # ! time complexity - o(no. of words)
     def _normalize_name(self, raw_name):
         """
         Turn a messy free-text name into something comparable:
@@ -118,9 +127,11 @@ class ReconciliationEngine:
         tokens = [t for t in name.split(' ') if t not in self.NAME_SUFFIXES_TO_STRIP]
         return ' '.join(tokens)
 
+    # ! time complexity - o(n)
     def _name_similarity(self, name_a, name_b):
         # ? what is a sequenceMatcher() ? is it an inbuilt func() doesn't seems like it?
         # ? and how does it even work?
+        # ? what is the time complexity? is a fast approach possible
         return SequenceMatcher(None, name_a, name_b).ratio()
 
     def match(self, ledger_df, bank_df):
@@ -133,7 +144,9 @@ class ReconciliationEngine:
         # For each ledger row, look at bank rows within the date tolerance window
         # that haven't been claimed yet, score them, and take the best one if it
         # clears both the amount and name thresholds.
+        # ! this is o(n^3)
         for l_idx, ledger_row in ledger_df.iterrows():
+            # ! this func is o(n^2)
             best_bank_idx, best_score, best_meta = self._find_best_single_match(ledger_row, bank_df, matched_bank_idx)
 
             # * if there is no error...
@@ -151,8 +164,10 @@ class ReconciliationEngine:
 
         # ---- Phase 2a: split matching (1 ledger row -> many bank rows) ----
         still_unresolved_ledger = []
+        # ! o((n^2r)
         for l_idx in unresolved_ledger_idx:
             ledger_row = ledger_df.loc[l_idx]
+            # ! o(n^matchconstant)
             combo, meta = self._find_combination_match(
                 target_row=ledger_row,
                 target_amount=ledger_row['amount'],
@@ -204,14 +219,10 @@ class ReconciliationEngine:
                         remaining_bank_idx.remove(match_bank_idx)
                         resolved_ledger_via_combine.update(ledger_combo)
 
-        final_unresolved_ledger = [
-            i for i in still_unresolved_ledger if i not in resolved_ledger_via_combine
-        ]
+        final_unresolved_ledger = [i for i in still_unresolved_ledger if i not in resolved_ledger_via_combine]
 
         # ---- Phase 3: whatever's left is a genuine exception ----
-        ledger_exceptions = [
-            self._build_ledger_exception(ledger_df.loc[i]) for i in final_unresolved_ledger
-        ]
+        ledger_exceptions = [self._build_ledger_exception(ledger_df.loc[i]) for i in final_unresolved_ledger]
         bank_exceptions = [
             self._build_bank_exception(bank_df.loc[i])
             for i in bank_df.index if i not in matched_bank_idx
@@ -220,10 +231,12 @@ class ReconciliationEngine:
         return matches, ledger_exceptions, bank_exceptions
 
     # -- Phase 1 helper: score every viable bank candidate for one ledger row ----
+    # ! time compliexity - o(n^2)
     def _find_best_single_match(self, ledger_row, bank_df, excluded_idx):
         best_idx, best_score, best_meta = None, -1, None
 
         # * for every ledger_row in bank_row
+        # * for loop note
         for b_idx, bank_row in bank_df.iterrows():
             if b_idx in excluded_idx:
                 continue
@@ -235,11 +248,10 @@ class ReconciliationEngine:
             amount_diff = abs(ledger_row['amount'] - bank_row['amount'])
             amount_maxi = max(ledger_row['amount'], bank_row['amount'])
             amount_percentage = amount_diff/amount_maxi*100;
-            # TODO check name_similarity()
-            name_sim = self._name_similarity(ledger_row['normalized_name'], bank_row['normalized_name'])
-
             amount_ok = amount_percentage <= self.AMOUNT_TOLERANCE_PERCENTAGE
-            name_ok = name_sim >= self.NAME_SIMILARITY_THRESHOLD
+
+            if not amount_ok:
+                continue
 
             # Currency is checked but NOT used to exclude a candidate — a currency
             # mismatch (see L006/B2006 in your test set) is exactly the kind of
@@ -249,7 +261,13 @@ class ReconciliationEngine:
             # ? this logic seems broken because of exchange rates
             currency_mismatch = ledger_row['currency'] != bank_row['currency']
 
-            if not (amount_ok and name_ok):
+            # TODO check name_similarity()
+            # ! this func is o(n)
+            # ! we can make a different pipelines which normalize and 
+            # ! match names first so that i don't require name_similarity() in a for loop
+            name_sim = self._name_similarity(ledger_row['normalized_name'], bank_row['normalized_name'])
+            name_ok = name_sim >= self.NAME_SIMILARITY_THRESHOLD
+            if not name_ok:
                 continue
 
             # Composite score: reward exact date/amount/name, penalize currency
@@ -274,11 +292,14 @@ class ReconciliationEngine:
         return best_idx, best_score, best_meta
 
     # * LGTM
+    # ! Candidate filtering: O(n * S), where S is name-similarity cost.
+    # ! Combination search: O(sum(C(n,r) * r)) for r=2..MAX_COMBINATION_SIZE.
+    # If MAX_COMBINATION_SIZE = k is constant, approximately O(n^k).
+    # Practical performance depends heavily on the filtered pool size.
     # -- Phase 2a helper: try summing N candidates to hit a target amount -------
-    def _find_combination_match(
-        self, target_row, target_amount, candidate_df, excluded_idx,
-        candidate_name_col, candidate_date_col, target_date,
-    ):
+    def _find_combination_match(self, target_row, target_amount, candidate_df, excluded_idx, candidate_name_col, candidate_date_col, target_date,):
+        # for loop in cadidate_df basically and store all the values in pool
+        # time complexity - o(n^2)
         pool = [
             i for i in candidate_df.index if i not in excluded_idx and 
             abs((candidate_df.loc[i, candidate_date_col] - target_date).days) <= self.DATE_TOLERANCE_DAYS and 
@@ -319,6 +340,7 @@ class ReconciliationEngine:
                 return b_idx
         return None
 
+    # ! time complexity - o(1)
     def _build_match_record(self, ledger_row, bank_rows, meta):
         discrepancies = []
         if meta.get("date_diff_days", 0) > 0:
@@ -330,9 +352,7 @@ class ReconciliationEngine:
         if meta.get("match_type") == "split":
             discrepancies.append(f"matched against {meta['bank_row_count']} combined bank records")
 
-        confidence = "high" if not discrepancies else (
-            "medium" if len(discrepancies) == 1 else "low"
-        )
+        confidence = "high" if not discrepancies else ("medium" if len(discrepancies) == 1 else "low")
 
         return {
             "ledger_id": ledger_row.get("transaction_id"),
@@ -341,6 +361,7 @@ class ReconciliationEngine:
             "discrepancies": discrepancies,
         }
 
+    # ! time complexity - o(1)
     def _build_combine_match_record(self, ledger_rows, bank_row):
         ledger_ids = [r.get("transaction_id") for r in ledger_rows]
         return {
@@ -350,6 +371,7 @@ class ReconciliationEngine:
             "discrepancies": [f"{len(ledger_ids)} ledger records combined to match one bank record"],
         }
 
+    # ! time complexity - o(1)
     def _build_ledger_exception(self, ledger_row):
         return {
             "ledger_id": ledger_row.get("transaction_id"),
@@ -381,6 +403,7 @@ class ReconciliationEngine:
             "reason": reason,
         }
 
+    # ! time complexity depends on AI CONNECTION
     def build_summary(self, ledger_df, bank_df, matches, ledger_exceptions, bank_exceptions):
         total_ledger = len(ledger_df)
         resolved_ledger = total_ledger - len(ledger_exceptions)
@@ -398,6 +421,7 @@ class ReconciliationEngine:
         narrative = self._llm_narrative(summary)
         return {**summary, **narrative}
 
+    # ! time complexity depends on AI CONNECTION
     def _llm_narrative(self, summary):
         prompt = f"""
         Given this reconciliation summary:
@@ -424,6 +448,7 @@ class ReconciliationEngine:
             return {"narrative": "Narrative unavailable.", "risk_level": "NA"}
 
     # * LGTM
+    # ! time complexity depends on AI CONNECTION
     def _call_llm_with_retry(self, prompt, task):
         if settings.TESTING:
             return json.dumps({"narrative": "Mock summary", "risk_level": "low"})

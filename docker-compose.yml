@@ -152,13 +152,13 @@ services:
       redis:
         condition: service_healthy
 
-  celery:
+  celery-1:
     build: .
     image: ai-transaction-pipeline
-    container_name: celery
+    container_name: celery-1
     env_file:
       - .env.docker
-    command: celery -A AI_transaction_processing_pipeline worker -l info
+    command: celery -A AI_transaction_processing_pipeline worker -l info -c 4
     volumes:
       - uploads_data:/app/uploads
     depends_on:
