@@ -182,7 +182,11 @@ services:
       - ./tests:/scripts
     command:
       - run
+      - -o
+      - experimental-prometheus-rw
       - /scripts/stress.js
+    environment:
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
     depends_on:
       web-1:
         condition: service_healthy
@@ -194,13 +198,19 @@ services:
   k6-load:
     image: grafana/k6
     container_name: load-test-k6
+    networks:
+      loadtest_net: {}
     profiles:
       - loadtest
     volumes:
       - ./tests:/scripts
     command:
       - run
+      - -o
+      - experimental-prometheus-rw
       - /scripts/load.js
+    environment:
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
     depends_on:
       web-1:
         condition: service_healthy
@@ -224,6 +234,12 @@ services:
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus
+    networks:
+      - default
+      - loadtest_net
+    command:
+    - '--config.file=/etc/prometheus/prometheus.yml'
+    - '--web.enable-remote-write-receiver'
     ports:
       - "9090:9090"
     volumes:

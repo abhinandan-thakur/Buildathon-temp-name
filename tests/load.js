@@ -9,14 +9,15 @@ const ledger_csvFile = open('ledger.csv', 'b');
 
 export const options = {
     stages: [
-        { duration: '90s', target: 500 },
-        { duration: '30s', target: 700 },
-        { duration: '30s', target: 900 },
-        { duration: '30s', target: 1200 },
-        { duration: '30s', target: 1500 },
-        { duration: '30s', target: 1800 },
-
-
+        { duration: '2m', target: 100 },
+        { duration: '3m', target: 200 },
+        { duration: '3m', target: 400 },
+        { duration: '3m', target: 600 },
+        { duration: '3m', target: 800 },
+        { duration: '5m', target: 1000 },
+        { duration: '5m', target: 1200 },
+        { duration: '5m', target: 1500 },
+        { duration: '3m', target: 0 },
     ],
     thresholds: {
         http_req_failed: ['rate<0.10'],
