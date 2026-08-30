@@ -358,64 +358,16 @@ Load testing was performed using k6.
 * Redis 7
 * Celery
 * Docker Compose (WSL2)
-* k6 load testing
+* k6 load/stress testing
 
 ### Load Profile
-
-```javascript
-stages: [
-  { duration: '30s', target: 50 },
-  { duration: '30s', target: 100 },
-  { duration: '30s', target: 200 },
-  { duration: '30s', target: 400 },
-  { duration: '30s', target: 600 },
-]
-```
+this is the test for my stress test profile
+![K6 stages](image.png)
 
 ### Resource Usage During Test
 
-#### ~130 VUs
-
-| Service    | CPU  | Memory |
-| ---------- | ---- | ------ |
-| Web        | 110% | 484 MB |
-| Celery     | 110% | 328 MB |
-| PostgreSQL | 98%  | 32 MB  |
-| Redis      | 2.9% | 5.7 MB |
-
-#### ~230 VUs
-
-| Service    | CPU  | Memory |
-| ---------- | ---- | ------ |
-| Web        | 138% | 510 MB |
-| Celery     | 10%  | 356 MB |
-| PostgreSQL | 31%  | 198 MB |
-| Redis      | 0.8% | 6.1 MB |
-
-#### ~430 VUs
-
-| Service    | CPU  | Memory |
-| ---------- | ---- | ------ |
-| Web        | 131% | 585 MB |
-| Celery     | 11%  | 376 MB |
-| PostgreSQL | 29%  | 198 MB |
-| Redis      | 1.1% | 6.6 MB |
-
-### Failure Point
-
-At approximately 550-600 VUs:
-
-* Upload requests started timing out
-* Status requests started timing out
-* Result requests started timing out
-
-Observed k6 errors:
-
-```text
-Post /jobs/upload/: request timeout
-Get /jobs/{id}/status/: request timeout
-Get /jobs/{id}/result/: request timeout
-```
+![k6 result](image-2.png)
+![Memory and CPU utilization during stress testing](image-4.png)
 
 ### Key Findings
 
@@ -432,17 +384,6 @@ Get /jobs/{id}/result/: request timeout
 The system successfully handled hundreds of concurrent virtual users without database exhaustion or memory collapse.
 
 The primary bottleneck appears to be request throughput at the Django application layer, where request latency eventually exceeded k6 timeout thresholds under sustained load approaching 600 VUs.
-
-
-#### 600 VUs
-
-```text
-Requests: 10,200
-Throughput: ~60 requests/sec
-Failure Rate: 0%
-Average Response Time: 1.42s
-p95 Response Time: 3.78s
-```
 
 #### Stress Testing
 
@@ -496,17 +437,6 @@ Greater scalability at the cost of increased operational complexity.
 * The application is intended for assignment evaluation and local development.
 
 ---
-
-## Future Improvements
-
-* Store transactions in a dedicated table
-* Add authentication and authorization
-* Add OpenAPI/Swagger documentation
-* Add rate limiting
-* Add distributed tracing and metrics
-* Implement caching for job listings
-* Add automated CI/CD pipelines
-
 ---
 
 ## Author

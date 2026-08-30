@@ -1,0 +1,18 @@
+# ? wtf? is global? is it like these are global prometheus settings?
+# * Yes. global contains default/global Prometheus configuration.
+# ? is scrape interval the time b/w each metrics scrape by prometheus
+# * Prometheus will scrape each configured target every 5 seconds.
+global:
+  scrape_interval: 5s
+
+# ? is this a way to set up cadvisor
+# ? what does cadvisor actually do
+# * Yes, this tells Prometheus what it should scrape.
+# * But scrape_configs isn't specifically "a way to set up cAdvisor.
+# * Prometheus, go to the machine/container called cadvisor on port 8080 and scrape its metric
+# * cAdvisor exposes a Prometheus-compatible endpoint at: http://cadvisor:8080/metrics
+scrape_configs:
+  - job_name: "cadvisor"
+    static_configs:
+      - targets:
+          - "cadvisor:8080"

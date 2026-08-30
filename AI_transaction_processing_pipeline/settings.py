@@ -31,11 +31,13 @@ DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 TESTING = os.getenv("TESTING", "False").lower() == "true"
 PROFILING = os.getenv("PROFILING", "False").lower() == "true"
 
-ALLOWED_HOSTS = [
-    "localhost",
-    "127.0.0.1",
-    "web",
-]
+# ALLOWED_HOSTS = [
+#     "localhost",
+#     "127.0.0.1",
+#     "web",
+# ]
+
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'nginx', 'web-1', 'web-2', 'web-3']
 
 
 # Application definition
