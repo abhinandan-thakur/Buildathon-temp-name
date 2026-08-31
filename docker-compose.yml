@@ -56,6 +56,7 @@ services:
   migrate:
     build: .
     image: ai-transaction-pipeline
+    container_name: migration-container
     env_file:
       - .env.docker
     command: python manage.py migrate

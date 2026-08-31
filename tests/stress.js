@@ -4,8 +4,8 @@ import { check, sleep } from 'k6';
 // const BASE_URL = __ENV.BASE_URL || 'nginx';
 const BASE_URL = 'nginx';
 const BASE_PORT = 80;
-const bank_csvFile = open('bank_statement.csv', 'b');
-const ledger_csvFile = open('ledger.csv', 'b');
+const bank_csvFile = open('bank_statement_large.csv', 'b');
+const ledger_csvFile = open('ledger_large.csv', 'b');
 
 
 export const options = {
@@ -37,8 +37,8 @@ export default function () {
     const uploadResponse = http.post(
         `http://${BASE_URL}:${BASE_PORT}/jobs/upload/`,
         {
-            bank_file: http.file(bank_csvFile, 'bank_statement.csv'),
-            ledger_file: http.file(ledger_csvFile, 'ledger.csv')
+            bank_file: http.file(bank_csvFile, 'bank_statement_large.csv'),
+            ledger_file: http.file(ledger_csvFile, 'ledger_large.csv')
         },
         {
             tags: { endpoint:'upload',},

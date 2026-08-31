@@ -53,7 +53,8 @@ class ReconciliationEngine:
     # are we willing to sum together to explain one row on the other side? Keep
     # ! this small — combinatorics blow up fast, and in practice most real splits are 2-4 way.
     # ! move this small further to 3 even 2 o(n^4) is a time bomb
-    MAX_COMBINATION_SIZE = 4
+    # ? shouldn't movig this to 3 mkae things faster i see no noticable difference in my stress test?
+    MAX_COMBINATION_SIZE = 2
 
     # Common legal-entity suffixes that add noise to name matching without adding
     # information ("Acme Vendors" and "Acme Vendors Pvt Ltd" are the same vendor).
@@ -187,21 +188,44 @@ class ReconciliationEngine:
         # ---- Phase 2b: combine matching (many ledger rows -> 1 bank row) ----
         # Group whatever's still unresolved by normalized name, and check whether
         # a *group* of ledger rows sums to a single remaining bank row.
-        remaining_bank_idx = [i for i in bank_df.index if i not in matched_bank_idx]
+        # ? can this be optimized?
+        # * this can be done by vector operations
+        # remaining_bank_idx = [i for i in bank_df.index if i not in matched_bank_idx]
+        remaining_bank_idx = bank_df.index[~bank_df.index.isin(matched_bank_idx)].tolist()
+        remaining_bank_set = set(remaining_bank_idx)
         resolved_ledger_via_combine = set()
+        bank_by_name = bank_df.groupby("normalized_name").groups
 
+        # so we are normalizaing the rows by similar name, seems fine
+        # doesn't seem a way to optimize it further
         for name, group in ledger_df.loc[still_unresolved_ledger].groupby('normalized_name'):
-            if name == "":
+            if not name:
                 continue
+            candidate_idx_pool = [i for i in bank_by_name.get(name, []) if i in remaining_bank_set]
+
+            if not candidate_idx_pool:
+                continue
+
+            # Extract these once.
+            # We don't want to repeatedly access ledger_df with .loc
+            # inside the combinations loop.
+            group_indices = group.index.tolist()
+            group_amounts = group["amount"].to_dict()
+            group_dates = group["date"].to_dict()
             for combo_size in range(2, self.MAX_COMBINATION_SIZE + 1):
-                if resolved_ledger_via_combine.issuperset(group.index):
+                if len(resolved_ledger_via_combine) >= len(group_indices):
                     break
-                for ledger_combo in itertools.combinations(group.index, combo_size):
+                for ledger_combo in itertools.combinations(group_indices, combo_size):
                     if any(i in resolved_ledger_via_combine for i in ledger_combo):
                         continue
-                    combo_amount = ledger_df.loc[list(ledger_combo), 'amount'].sum()
-                    combo_date = ledger_df.loc[list(ledger_combo), 'date'].max()
 
+                    combo_amount = sum(group_amounts[i] for i in ledger_combo)
+                    combo_date = max(group_dates[i] for i in ledger_combo)
+
+                    # combo_amount = ledger_df.loc[list(ledger_combo), 'amount'].sum()
+                    # combo_date = ledger_df.loc[list(ledger_combo), 'date'].max()
+
+                    # ! time complexity o(n*word)
                     match_bank_idx = self._find_single_amount_match(
                         target_amount=combo_amount,
                         target_date=combo_date,
@@ -209,15 +233,26 @@ class ReconciliationEngine:
                         candidate_df=bank_df,
                         candidate_idx_pool=remaining_bank_idx,
                     )
-                    if match_bank_idx is not None:
-                        ledger_rows = [ledger_df.loc[i] for i in ledger_combo]
-                        bank_row = bank_df.loc[match_bank_idx]
-                        matches.append(self._build_combine_match_record(
-                            ledger_rows, bank_row
-                        ))
-                        matched_bank_idx.add(match_bank_idx)
-                        remaining_bank_idx.remove(match_bank_idx)
-                        resolved_ledger_via_combine.update(ledger_combo)
+
+                    if match_bank_idx is None:
+                        continue
+
+                    ledger_rows = [ledger_df.loc[i] for i in ledger_combo]
+                    bank_row = bank_df.loc[match_bank_idx]
+                    matches.append(self._build_combine_match_record(ledger_rows, bank_row))
+                    matched_bank_idx.add(match_bank_idx)
+                    remaining_bank_idx.remove(match_bank_idx)
+                    resolved_ledger_via_combine.update(ledger_combo)
+
+                    # Remove the matched bank row from this group's
+                    # candidate pool so we don't search it again.
+                    candidate_idx_pool.remove(match_bank_idx)
+
+                    if not candidate_idx_pool:
+                        break
+                    
+                if not candidate_idx_pool:
+                    break
 
         final_unresolved_ledger = [i for i in still_unresolved_ledger if i not in resolved_ledger_via_combine]
 
@@ -231,26 +266,33 @@ class ReconciliationEngine:
         return matches, ledger_exceptions, bank_exceptions
 
     # -- Phase 1 helper: score every viable bank candidate for one ledger row ----
-    # ! time compliexity - o(n^2)
+    # ! I THINK THIS IS DONE FOR NOW
     def _find_best_single_match(self, ledger_row, bank_df, excluded_idx):
+        available = bank_df[~bank_df.index.isin(excluded_idx)]
+        if available.empty:
+            return None, -1, None
+
+        # Vectorized date diff — works if txn_date is datetime64; falls back safely if it's plain `date` objects
+        date_diff = (available['txn_date'] - ledger_row['date']).abs()
+        if date_diff.dtype == 'object':  # still python timedelta objects, not vectorized dtype
+            date_diff = date_diff.apply(lambda td: td.days)
+        else:
+            date_diff = date_diff.dt.days
+
+        amount_diff = (available['amount'] - ledger_row['amount']).abs()
+        amount_maxi = pd.concat([available['amount'], pd.Series(ledger_row['amount'], index=available.index)], axis=1).max(axis=1)
+        amount_pct = amount_diff / amount_maxi * 100
+
+        candidates_mask = (date_diff <= self.DATE_TOLERANCE_DAYS) & (amount_pct <= self.AMOUNT_TOLERANCE_PERCENTAGE)
+        candidates = available[candidates_mask]
+        if candidates.empty:
+            return None, -1, None
+
         best_idx, best_score, best_meta = None, -1, None
 
-        # * for every ledger_row in bank_row
-        # * for loop note
-        for b_idx, bank_row in bank_df.iterrows():
-            if b_idx in excluded_idx:
-                continue
-
-            date_diff = abs((ledger_row['date'] - bank_row['txn_date']).days)
-            if date_diff > self.DATE_TOLERANCE_DAYS:
-                continue
-
-            amount_diff = abs(ledger_row['amount'] - bank_row['amount'])
-            amount_maxi = max(ledger_row['amount'], bank_row['amount'])
-            amount_percentage = amount_diff/amount_maxi*100;
-            amount_ok = amount_percentage <= self.AMOUNT_TOLERANCE_PERCENTAGE
-
-            if not amount_ok:
+        for b_idx, bank_row in candidates.iterrows():
+            name_sim = self._name_similarity(ledger_row['normalized_name'], bank_row['normalized_name'])
+            if name_sim < self.NAME_SIMILARITY_THRESHOLD:
                 continue
 
             # Currency is checked but NOT used to exclude a candidate — a currency
@@ -260,34 +302,17 @@ class ReconciliationEngine:
             # ? how can amount be ok if there is a currency_mismatch
             # ? this logic seems broken because of exchange rates
             currency_mismatch = ledger_row['currency'] != bank_row['currency']
-
-            # TODO check name_similarity()
-            # ! this func is o(n)
-            # ! we can make a different pipelines which normalize and 
-            # ! match names first so that i don't require name_similarity() in a for loop
-            name_sim = self._name_similarity(ledger_row['normalized_name'], bank_row['normalized_name'])
-            name_ok = name_sim >= self.NAME_SIMILARITY_THRESHOLD
-            if not name_ok:
-                continue
-
-            # Composite score: reward exact date/amount/name, penalize currency
-            # mismatch so an exact-currency candidate wins if one exists.
+            dd = date_diff[b_idx]
+            ad = amount_diff[b_idx]
             score = (
-                (1 - date_diff / max(self.DATE_TOLERANCE_DAYS, 1)) * 0.3
-                + (1 - min(amount_diff / max(ledger_row['amount'], 1), 1)) * 0.4
+                (1 - dd / max(self.DATE_TOLERANCE_DAYS, 1)) * 0.3
+                + (1 - min(ad / max(ledger_row['amount'], 1), 1)) * 0.4
                 + name_sim * 0.3
                 - (0.5 if currency_mismatch else 0)
             )
-
             if score > best_score:
-                best_score = score
-                best_idx = b_idx
-                best_meta = {
-                    "date_diff_days": date_diff,
-                    "amount_diff": round(amount_diff, 2),
-                    "name_similarity": round(name_sim, 2),
-                    "currency_mismatch": currency_mismatch,
-                }
+                best_score, best_idx = score, b_idx
+                best_meta = {"date_diff_days": dd, "amount_diff": round(ad, 2), "name_similarity": round(name_sim, 2), "currency_mismatch": currency_mismatch}
 
         return best_idx, best_score, best_meta
 
@@ -298,13 +323,18 @@ class ReconciliationEngine:
     # Practical performance depends heavily on the filtered pool size.
     # -- Phase 2a helper: try summing N candidates to hit a target amount -------
     def _find_combination_match(self, target_row, target_amount, candidate_df, excluded_idx, candidate_name_col, candidate_date_col, target_date,):
-        # for loop in cadidate_df basically and store all the values in pool
-        # time complexity - o(n^2)
-        pool = [
-            i for i in candidate_df.index if i not in excluded_idx and 
-            abs((candidate_df.loc[i, candidate_date_col] - target_date).days) <= self.DATE_TOLERANCE_DAYS and 
-            self._name_similarity(candidate_df.loc[i, candidate_name_col], target_row['normalized_name']) >= self.NAME_SIMILARITY_THRESHOLD
-        ]
+        available = candidate_df[~candidate_df.index.isin(excluded_idx)]
+        date_diff = (available['txn_date'] - target_date).abs()
+        if date_diff.dtype == 'object':
+            date_diff = date_diff.apply(lambda td: td.days)
+        else:
+            date_diff = date_diff.dt.days
+
+        date_mask = date_diff <= self.DATE_TOLERANCE_DAYS
+        date_filtered = available[date_mask]
+
+        name_sims = date_filtered[candidate_name_col].apply(lambda name: self._name_similarity(name, target_row['normalized_name']))
+        pool = date_filtered.index[name_sims >= self.NAME_SIMILARITY_THRESHOLD].tolist()
 
         for combo_size in range(2, self.MAX_COMBINATION_SIZE + 1):
             for combo in itertools.combinations(pool, combo_size):
@@ -314,30 +344,43 @@ class ReconciliationEngine:
                 amount_percentage = amount_diff/amount_maxi*100;
 
                 if amount_percentage <= self.AMOUNT_TOLERANCE_PERCENTAGE:
-                    return list(combo), {
-                        "match_type": "split",
-                        "bank_row_count": combo_size,
-                        "combined_amount": round(combo_sum, 2),
-                    }
+                    return list(combo), {"match_type": "split", "bank_row_count": combo_size, "combined_amount": round(combo_sum, 2),}
         return None, None
 
-    # * LGTM
+    # * LGTM DONE
     # -- Phase 2b helper: find one bank row matching a combined ledger amount ---
+    # ! time complexity o(n*word)
     def _find_single_amount_match(self, target_amount, target_date, target_name, candidate_df, candidate_idx_pool):
-        for b_idx in candidate_idx_pool:
-            bank_row = candidate_df.loc[b_idx]
-            date_diff = abs((bank_row['txn_date'] - target_date).days)
-            if date_diff > self.DATE_TOLERANCE_DAYS:
-                continue
-            if self._name_similarity(bank_row['normalized_name'], target_name) < self.NAME_SIMILARITY_THRESHOLD:
-                continue
-           
-            amount_diff = abs(target_amount - bank_row['amount'])
-            amount_maxi = max(target_amount, bank_row['amount'])
-            amount_percentage = amount_diff/amount_maxi*100;
-        
-            if amount_percentage <= self.AMOUNT_TOLERANCE_PERCENTAGE:
+        # *** som something like this can work***
+        candidates = candidate_df.loc[candidate_idx_pool]
+        if candidates.empty:
+            return None
+
+        date_diff = (candidates['txn_date'] - target_date).abs()
+        if date_diff.dtype == 'object':
+            date_diff = date_diff.apply(lambda td: td.days)
+        else:
+            date_diff = date_diff.dt.days
+
+        amount_diff = (candidates['amount'] - target_amount).abs()
+        amount_maxi = pd.concat([candidates['amount'], pd.Series(target_amount, index=candidates.index)], axis=1).max(axis=1)
+        amount_pct = amount_diff / amount_maxi * 100
+
+        candidates_mask = (date_diff <= self.DATE_TOLERANCE_DAYS) & (amount_pct <= self.AMOUNT_TOLERANCE_PERCENTAGE)
+        candidates = candidates[candidates_mask]
+        if candidates.empty:
+            return None
+
+        for b_idx, bank_row in candidates.iterrows():
+
+            name_sim = self._name_similarity(
+                bank_row["normalized_name"],
+                target_name,
+            )
+
+            if name_sim >= self.NAME_SIMILARITY_THRESHOLD:
                 return b_idx
+
         return None
 
     # ! time complexity - o(1)
