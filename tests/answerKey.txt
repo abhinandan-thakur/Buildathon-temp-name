@@ -52,3 +52,5 @@ BANK_EXCEPTIONS = {
     "B2033",  
     "B2034",  
 }
+
+AMBIGUOUS_NEAR_DUPLICATES = []

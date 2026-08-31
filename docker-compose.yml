@@ -159,7 +159,24 @@ services:
     container_name: celery-1
     env_file:
       - .env.docker
-    command: celery -A AI_transaction_processing_pipeline worker -l info -c 4
+    command: celery -A AI_transaction_processing_pipeline worker -l info -c 2
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery-2:
+    build: .
+    image: ai-transaction-pipeline
+    container_name: celery-2
+    env_file:
+      - .env.docker
+    command: celery -A AI_transaction_processing_pipeline worker -l info -c 2
     volumes:
       - uploads_data:/app/uploads
     depends_on:

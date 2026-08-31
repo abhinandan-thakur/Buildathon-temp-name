@@ -39,6 +39,25 @@ django.setup()
 settings.TESTING = True
 BANK_FILE = "tests/bank_statement_large.csv"
 LEDGER_FILE = "tests/ledger_large.csv"
+"""
+Answer key for ledger_large.csv / bank_statement_large.csv
+Generated programmatically by generate.py (seed=42) — do not hand-edit;
+regenerate instead if you need to change category proportions.
+
+Total ledger rows: 300
+Total bank rows:   305
+Expected matches:  280
+Ledger exceptions: 20
+Bank exceptions:   20
+
+NOTE on near-duplicate pairs: these are intentionally ambiguous.
+The pairing below is ONE valid answer (creation-order correlated),
+not the only correct one. If your engine pairs a near-duplicate set
+the 'other' consistent way (swapped), treat it as correct, not a miss.
+See AMBIGUOUS_NEAR_DUPLICATES below for which ledger/bank ID sets
+are involved, so you can special-case them in scoring if needed.
+"""
+
 EXPECTED_MATCHES = {
     'L001': ['B0001'],
     'L002': ['B0002'],
@@ -340,7 +359,6 @@ AMBIGUOUS_NEAR_DUPLICATES = [
     (['L279', 'L280'], ['B0284', 'B0285']),
 ]
 
-
 def build_actual_match_map(matches):
     """
     Turn the engine's `matches` list into {ledger_id: set(bank_refs)}.
@@ -364,71 +382,188 @@ def build_actual_match_map(matches):
 
 def evaluate(result):
     matches = result["matches"]
-    ledger_exceptions_actual = {e["ledger_id"] for e in result["ledger_exceptions"]}
-    bank_exceptions_actual = {e["bank_ref"] for e in result["bank_exceptions"]}
+
+    ledger_exceptions_actual = {
+        e["ledger_id"] for e in result["ledger_exceptions"]
+    }
+    bank_exceptions_actual = {
+        e["bank_ref"] for e in result["bank_exceptions"]
+    }
+
     actual_match_map = build_actual_match_map(matches)
 
-    exact_matches = []          # engine matched exactly the expected bank_refs
-    partial_matches = []        # engine matched, but to the wrong bank_ref(s)
-    missed_matches = []         # engine should have matched this but didn't
+    exact_matches = []
+    partial_matches = []
+    missed_matches = []
 
-    # Build a lookup: ledger_id -> the full set of bank_refs valid for its ambiguous group
     ambiguous_lookup = {}
     for lids, brefs in AMBIGUOUS_NEAR_DUPLICATES:
         for lid in lids:
             ambiguous_lookup[lid] = set(brefs)
 
+    # ------------------------------------------------------------
+    # Evaluate transactions that SHOULD have matched
+    # ------------------------------------------------------------
     for ledger_id, expected_refs in EXPECTED_MATCHES.items():
+
         expected_set = set(expected_refs)
 
-        if ledger_id in actual_match_map:
-            actual_set = actual_match_map[ledger_id]
-            if actual_set == expected_set:
-                exact_matches.append(ledger_id)
-            elif ledger_id in ambiguous_lookup and actual_set.issubset(ambiguous_lookup[ledger_id]) and len(actual_set) == len(expected_set):
-                exact_matches.append(ledger_id)  # valid alternate pairing within the ambiguous group
-            else:
-                partial_matches.append((ledger_id, expected_set, actual_set))
-        elif ledger_id in ledger_exceptions_actual:
-            missed_matches.append((ledger_id, expected_set, "flagged as exception instead of matched"))
+        if ledger_id not in actual_match_map:
+            missed_matches.append(
+                (
+                    ledger_id,
+                    expected_set,
+                    "flagged as exception instead of matched"
+                    if ledger_id in ledger_exceptions_actual
+                    else "missing from output entirely",
+                )
+            )
+            continue
+
+        actual_set = actual_match_map[ledger_id]
+
+        if actual_set == expected_set:
+            exact_matches.append(ledger_id)
+
+        elif (
+            ledger_id in ambiguous_lookup
+            and actual_set.issubset(ambiguous_lookup[ledger_id])
+            and len(actual_set) == len(expected_set)
+        ):
+            exact_matches.append(ledger_id)
+
         else:
-            missed_matches.append((ledger_id, expected_set, "missing from output entirely"))
+            partial_matches.append(
+                (ledger_id, expected_set, actual_set)
+            )
 
-    # (a) force-match something thatshould have stayed an exception, or 
-    # (b) exception-out something that should have matched? 
-    # (c) is already captured above via missed_matches.
-    ledger_exc_correct = LEDGER_EXCEPTIONS & ledger_exceptions_actual
-    ledger_exc_false_match = LEDGER_EXCEPTIONS - ledger_exceptions_actual  # should've been exception, got force-matched
-    ledger_exc_unexpected = ledger_exceptions_actual - LEDGER_EXCEPTIONS   # flagged exception, shouldn't have been
+    # ------------------------------------------------------------
+    # Evaluate ledger exceptions
+    # ------------------------------------------------------------
+    ledger_exc_correct = (
+        LEDGER_EXCEPTIONS & ledger_exceptions_actual
+    )
 
-    bank_exc_correct = BANK_EXCEPTIONS & bank_exceptions_actual
-    bank_exc_false_match = BANK_EXCEPTIONS - bank_exceptions_actual        # should've been exception, got force-matched
-    bank_exc_unexpected = bank_exceptions_actual - BANK_EXCEPTIONS         # flagged exception, shouldn't have been
+    ledger_exc_false_match = (
+        LEDGER_EXCEPTIONS - ledger_exceptions_actual
+    )
 
-    total_ledger_cases = len(EXPECTED_MATCHES)+len(LEDGER_EXCEPTIONS)
-    reported_match_rate = result["summary"]["match_rate_percent"]
-    true_match_rate = round(100 * len(exact_matches) / total_ledger_cases, 1)
+    ledger_exc_unexpected = (
+        ledger_exceptions_actual - LEDGER_EXCEPTIONS
+    )
+
+    # ------------------------------------------------------------
+    # Evaluate bank exceptions
+    # ------------------------------------------------------------
+    bank_exc_correct = (
+        BANK_EXCEPTIONS & bank_exceptions_actual
+    )
+
+    bank_exc_false_match = (
+        BANK_EXCEPTIONS - bank_exceptions_actual
+    )
+
+    bank_exc_unexpected = (
+        bank_exceptions_actual - BANK_EXCEPTIONS
+    )
+
+    # ------------------------------------------------------------
+    # Metrics
+    # ------------------------------------------------------------
+
+    total_expected_matches = len(EXPECTED_MATCHES)
+
+    total_ledger_cases = (
+        len(EXPECTED_MATCHES)
+        + len(LEDGER_EXCEPTIONS)
+    )
+
+    exact_match_count = len(exact_matches)
+    partial_match_count = len(partial_matches)
+    missed_match_count = len(missed_matches)
+
+    # How many transactions that SHOULD match were matched correctly?
+    match_recall = (
+        100 * exact_match_count / total_expected_matches
+        if total_expected_matches
+        else 100.0
+    )
+
+    # How many transactions that should be exceptions were correctly
+    # identified as exceptions?
+    ledger_exception_accuracy = (
+        100 * len(ledger_exc_correct) / len(LEDGER_EXCEPTIONS)
+        if LEDGER_EXCEPTIONS
+        else 100.0
+    )
+
+    bank_exception_accuracy = (
+        100 * len(bank_exc_correct) / len(BANK_EXCEPTIONS)
+        if BANK_EXCEPTIONS
+        else 100.0
+    )
+
+    # Wrong automatic matches are dangerous.
+    wrong_match_rate = (
+        100 * partial_match_count / total_expected_matches
+        if total_expected_matches
+        else 0.0
+    )
+
+    # Overall ledger decision accuracy:
+    #
+    # Correct match + correct exception
+    # ----------------------------------
+    #        all ledger cases
+    #
+    correctly_handled_ledger_cases = (
+        exact_match_count
+        + len(ledger_exc_correct)
+    )
+
+    overall_ledger_accuracy = (
+        100 * correctly_handled_ledger_cases / total_ledger_cases
+        if total_ledger_cases
+        else 100.0
+    )
 
     return {
         "exact_matches": exact_matches,
         "partial_matches": partial_matches,
         "missed_matches": missed_matches,
+
         "ledger_exceptions": {
             "correct": sorted(ledger_exc_correct),
             "false_matched": sorted(ledger_exc_false_match),
             "unexpectedly_flagged": sorted(ledger_exc_unexpected),
         },
+
         "bank_exceptions": {
             "correct": sorted(bank_exc_correct),
             "false_matched": sorted(bank_exc_false_match),
             "unexpectedly_flagged": sorted(bank_exc_unexpected),
         },
-        "reported_match_rate_percent": reported_match_rate,
-        "true_match_rate_percent": true_match_rate,
-        "exact_match_count": len(exact_matches),
-        "partial_match_count": len(partial_matches),
-        "missed_match_count": len(missed_matches),
-        "total_expected_matches": total_ledger_cases,
+
+        # Existing engine-reported number, retained for comparison.
+        "reported_match_rate_percent":
+            result["summary"]["match_rate_percent"],
+
+        # New, clearer metrics.
+        "match_recall_percent": round(match_recall, 1),
+        "wrong_match_rate_percent": round(wrong_match_rate, 1),
+        "ledger_exception_accuracy_percent":
+            round(ledger_exception_accuracy, 1),
+        "bank_exception_accuracy_percent":
+            round(bank_exception_accuracy, 1),
+        "overall_ledger_accuracy_percent":
+            round(overall_ledger_accuracy, 1),
+
+        "exact_match_count": exact_match_count,
+        "partial_match_count": partial_match_count,
+        "missed_match_count": missed_match_count,
+
+        "total_expected_matches": total_expected_matches,
+        "total_ledger_cases": total_ledger_cases,
     }
 
 def print_report(scores):
@@ -436,42 +571,98 @@ def print_report(scores):
     print("RECONCILIATION ENGINE — EVAL HARNESS REPORT")
     print("=" * 70)
 
-    print(f"\nEngine-reported match rate:  {scores['reported_match_rate_percent']}%")
-    print(f"Ground-truth match rate:     {scores['true_match_rate_percent']}%  "
-          f"({scores['exact_match_count']}/{scores['total_expected_matches']} exact)")
+    print(
+        f"\nEngine-reported match rate: "
+        f"{scores['reported_match_rate_percent']}%"
+    )
 
-    if scores["reported_match_rate_percent"] != scores["true_match_rate_percent"]:
-        print("  ⚠ These numbers disagree — your engine's own summary math and its "
-              "actual accuracy have drifted apart. Investigate before trusting the "
-              "headline number in a demo.")
+    print(
+        f"Match recall:                 "
+        f"{scores['match_recall_percent']}%"
+        f" ({scores['exact_match_count']}/"
+        f"{scores['total_expected_matches']})"
+    )
+
+    print(
+        f"Wrong-match rate:             "
+        f"{scores['wrong_match_rate_percent']}%"
+    )
+
+    print(
+        f"Ledger exception accuracy:    "
+        f"{scores['ledger_exception_accuracy_percent']}%"
+    )
+
+    print(
+        f"Bank exception accuracy:      "
+        f"{scores['bank_exception_accuracy_percent']}%"
+    )
+
+    print(
+        f"Overall ledger accuracy:      "
+        f"{scores['overall_ledger_accuracy_percent']}%"
+    )
 
     print(f"\nExact matches:   {scores['exact_match_count']}")
-    print(f"Partial matches: {scores['partial_match_count']}  (matched, but to the wrong bank record)")
-    print(f"Missed matches:  {scores['missed_match_count']}  (should have matched, didn't)")
+    print(f"Partial matches: {scores['partial_match_count']}")
+    print(f"Missed matches:  {scores['missed_match_count']}")
 
     if scores["partial_matches"]:
         print("\n--- Partial matches (wrong pairing) ---")
+
         for ledger_id, expected, actual in scores["partial_matches"]:
-            print(f"  {ledger_id}: expected {sorted(expected)}, got {sorted(actual)}")
+            print(
+                f"  {ledger_id}: "
+                f"expected {sorted(expected)}, "
+                f"got {sorted(actual)}"
+            )
 
     if scores["missed_matches"]:
         print("\n--- Missed matches ---")
+
         for ledger_id, expected, reason in scores["missed_matches"]:
-            print(f"  {ledger_id}: expected {sorted(expected)} — {reason}")
+            print(
+                f"  {ledger_id}: "
+                f"expected {sorted(expected)} — {reason}"
+            )
 
     le = scores["ledger_exceptions"]
-    print(f"\nLedger exceptions correctly identified: {len(le['correct'])}/{len(LEDGER_EXCEPTIONS)}")
+
+    print(
+        f"\nLedger exceptions correctly identified: "
+        f"{len(le['correct'])}/{len(LEDGER_EXCEPTIONS)}"
+    )
+
     if le["false_matched"]:
-        print(f"  ⚠ Should have been exceptions but got force-matched: {le['false_matched']}")
+        print(
+            f"  WARNING: Should have been exceptions "
+            f"but got force-matched: {le['false_matched']}"
+        )
+
     if le["unexpectedly_flagged"]:
-        print(f"  ⚠ Flagged as exceptions but shouldn't have been: {le['unexpectedly_flagged']}")
+        print(
+            f"  WARNING: Flagged as exceptions "
+            f"but shouldn't have been: {le['unexpectedly_flagged']}"
+        )
 
     be = scores["bank_exceptions"]
-    print(f"\nBank exceptions correctly identified: {len(be['correct'])}/{len(BANK_EXCEPTIONS)}")
+
+    print(
+        f"\nBank exceptions correctly identified: "
+        f"{len(be['correct'])}/{len(BANK_EXCEPTIONS)}"
+    )
+
     if be["false_matched"]:
-        print(f"  ⚠ Should have been exceptions but got force-matched: {be['false_matched']}")
+        print(
+            f"  WARNING: Should have been exceptions "
+            f"but got force-matched: {be['false_matched']}"
+        )
+
     if be["unexpectedly_flagged"]:
-        print(f"  ⚠ Flagged as exceptions but shouldn't have been: {be['unexpectedly_flagged']}")
+        print(
+            f"  WARNING: Flagged as exceptions "
+            f"but shouldn't have been: {be['unexpectedly_flagged']}"
+        )
 
     print("\n" + "=" * 70)
 
