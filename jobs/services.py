@@ -64,7 +64,6 @@ class ReconciliationEngine:
         return pd.read_csv(file)
 
     def clean_ledger(self, df):
-        df = df.copy()
         df["date"] = pd.to_datetime(df["date"], format="mixed").dt.date
         df["amount"] = self._parse_amount(df["amount"])
         df["currency"] = df["currency"].fillna("").astype(str).str.upper().str.strip()
@@ -72,7 +71,6 @@ class ReconciliationEngine:
         return df
 
     def clean_bank(self, df):
-        df = df.copy()
         df["txn_date"] = pd.to_datetime(df["txn_date"], format="mixed").dt.date
         df["amount"] = self._parse_amount(df["amount"])
         df["currency"] = df["currency"].fillna("").astype(str).str.upper().str.strip()
@@ -98,16 +96,15 @@ class ReconciliationEngine:
         if not name_a or not name_b:
             return 0.0
         ratio = SequenceMatcher(None, name_a, name_b).ratio()
-        # ? wtf? is this? why?
         shorter, longer = (name_a, name_b) if len(name_a) <= len(name_b) else (name_b, name_a)
         if shorter and (longer == shorter or longer.startswith(shorter + " ")):
             ratio = max(ratio, 0.75)
         return ratio
     
     def _name_similarity(self, name_a, name_b):
-        if(name_a <= name_b):
-            return self._name_similarity_cached(name_a, name_b)
-        return self._name_similarity_cached(name_b, name_a)
+        # Normalize order using tuple to ensure cache hits
+        key = (name_a, name_b) if name_a <= name_b else (name_b, name_a)
+        return self._name_similarity_cached(key[0], key[1])
 
     # ? How many functions are calling this? tbh?
     def _effective_date_tolerance(self, ledger_row, bank_row):
@@ -258,12 +255,27 @@ class ReconciliationEngine:
 
         candidate_rows = []
         name_scores = {}
+        amount_diff_map = {}
+        
+        # Pre-calculate amount tolerances once
+        amount_diff_series = (available["amount"] - ledger_row["amount"]).abs()
+        denom = available["amount"].replace(0, pd.NA).fillna(abs(ledger_row["amount"]))
+        amount_pct_series = (amount_diff_series / denom) * 100
+        
         for bank_row in available.itertuples(index=True):
             b_idx = bank_row.Index
+            amount_delta = float(amount_diff_series[b_idx])
+            amount_pct = float(amount_pct_series[b_idx])
+            
+            # Early exit on amount tolerance
+            if amount_pct > self.AMOUNT_TOLERANCE_PERCENTAGE:
+                continue
+            
             name_sim = self._name_similarity(ledger_row["normalized_name"], bank_row.normalized_name)
             if name_sim < self.NAME_SIMILARITY_THRESHOLD:
                 continue
-            amount_delta = abs(float(bank_row.amount) - float(ledger_row["amount"]))
+            
+            # Determine date tolerance based on name and amount
             if amount_delta > 2.0:
                 date_tol = self.DATE_TOLERANCE_DAYS
             elif name_sim >= 0.9 and amount_delta <= 1.0:
@@ -272,39 +284,35 @@ class ReconciliationEngine:
                 date_tol = self.EXTENDED_DATE_TOLERANCE_DAYS
             else:
                 date_tol = self.DATE_TOLERANCE_DAYS
+            
             if int(date_diff[b_idx]) > date_tol:
                 continue
+            
             candidate_rows.append(b_idx)
             name_scores[b_idx] = name_sim
+            amount_diff_map[b_idx] = amount_delta
 
         if not candidate_rows:
             return []
 
-        available = available.loc[candidate_rows]
-        date_diff = date_diff.loc[candidate_rows]
-
-        amount_diff = (available["amount"] - ledger_row["amount"]).abs()
-        denom = available["amount"].replace(0, pd.NA).fillna(abs(ledger_row["amount"]))
-        amount_pct = (amount_diff / denom) * 100
-        candidates = available[amount_pct <= self.AMOUNT_TOLERANCE_PERCENTAGE]
-        if candidates.empty:
-            return []
-
         scored = []
-        for bank_row in candidates.itertuples(index=True):
-            b_idx = bank_row.Index
+        ledger_amount = abs(ledger_row["amount"])
+        for b_idx in candidate_rows:
+            bank_row = available.loc[b_idx]
             name_sim = name_scores[b_idx]
             date_delta_days = int(date_diff[b_idx])
-            amount_delta = float(amount_diff[b_idx])
+            amount_delta = amount_diff_map[b_idx]
+            
             dynamic_date_tolerance = self.DATE_TOLERANCE_DAYS
             if amount_delta <= 2.0 and (
                 (name_sim >= 0.9 and amount_delta <= 1.0)
                 or (name_sim >= 0.8 and amount_delta <= 2.0)
             ):
                 dynamic_date_tolerance = self.EXTENDED_DATE_TOLERANCE_DAYS
+            
             date_score = max(0.0, 1.0 - (date_delta_days / max(dynamic_date_tolerance, 1)))
-            amount_score = max(0.0, 1.0 - (amount_delta / max(abs(ledger_row["amount"]), 1)))
-            currency_mismatch = ledger_row["currency"] != bank_row.currency
+            amount_score = max(0.0, 1.0 - (amount_delta / max(ledger_amount, 1)))
+            currency_mismatch = ledger_row["currency"] != bank_row["currency"]
             currency_penalty = 0.5 if currency_mismatch else 0.0
             score = 0.45 * name_sim + 0.35 * amount_score + 0.20 * date_score - currency_penalty
             meta = {
@@ -328,37 +336,30 @@ class ReconciliationEngine:
         return score
 
     def _find_exact_rescue_match(self, ledger_row, bank_df, bank_used):
-        # ? so avail has all but not which are not in bank used good but why.copt()
-        # ? isn't copy an overhead operation wouldn't straight up passing reference eb bettwer an dfaster
         available = bank_df[~bank_df.index.isin(bank_used)]
         if available.empty:
             return None
 
         candidates = []
+        ledger_amount = abs(float(ledger_row["amount"]))
+        
         for b_idx, bank_row in available.iterrows():
-            # * moving name similarity below because it has hig computational cost
-            # * hopin this won't break anything let me just check before and after result
-            # * BEFORE 
-            # * Engine-reported match rate: 89.3% Match recall:                 92.1% (258/280) Wrong-match rate:             2.1%
-            # * Ledger exception accuracy:    80.0% Bank exception accuracy:      100.0% Overall ledger accuracy:      91.3%
-            # * Exact matches:   258 Partial matches: 6 Missed matches:  16
-            # * AFTER
-            # * Engine-reported match rate: 89.3% Match recall:                 92.1% (258/280) Wrong-match rate:             2.1%
-            # * Ledger exception accuracy:    80.0% Bank exception accuracy:      100.0% Overall ledger accuracy:      91.3%
-            # * Exact matches:   258 Partial matches: 6 Missed matches:  16
-
+            # Cheap checks first
             amount_delta = abs(float(bank_row["amount"]) - float(ledger_row["amount"]))
-            if amount_delta > max(2.0, abs(float(ledger_row["amount"])) * 0.02):
+            if amount_delta > max(2.0, ledger_amount * 0.02):
                 continue
             date_delta = abs((bank_row["txn_date"] - ledger_row["date"]).days)
             if date_delta > 30:
                 continue
+            
+            # Expensive check last
             name_sim = self._name_similarity(ledger_row["normalized_name"], bank_row["normalized_name"])
             if name_sim < 0.58:
                 continue
+            
             score = (
                 0.6 * name_sim
-                + 0.35 * max(0.0, 1.0 - (amount_delta / max(abs(float(ledger_row["amount"])), 1)))
+                + 0.35 * max(0.0, 1.0 - (amount_delta / max(ledger_amount, 1)))
                 + 0.05 * max(0.0, 1.0 - (date_delta / 30.0))
             )
             candidates.append((score, b_idx))
@@ -373,7 +374,6 @@ class ReconciliationEngine:
         return best_idx
 
     def _find_combination_match(self,target_row,target_amount,candidate_df,excluded_idx,candidate_name_col,candidate_date_col,target_date,):
-        # ? again? copy()
         available = candidate_df if not excluded_idx else candidate_df[~candidate_df.index.isin(excluded_idx)]
         if available.empty:
             return None, None
@@ -386,27 +386,22 @@ class ReconciliationEngine:
 
         filtered = []
         name_scores = {}
-        # ? yup, we should filter the dataset first on data diff? that is understandable?
-        # ? But my question why not do target amount here only too? another filter and it would be way better off?
+        # Pre-calculate for better performance
+        amount_diff_series = (available["amount"] - target_amount).abs()
+        
         for idx, row in available.iterrows():
-            # ? i think there i still a way to kind of avoid name_similarity() ? 
-            # ? here is what i think?
-            # ? check if the amount_delta is greater > 2 and data diff > DATE_TOLERANCE_DAYS: continue?
-            # ? maybe i am wrong?
             name_sim = self._name_similarity(target_row["normalized_name"], row[candidate_name_col])
             if name_sim < self.NAME_SIMILARITY_THRESHOLD:
                 continue
-            amount_delta = abs(float(row["amount"]) - float(target_amount))
+            amount_delta = float(amount_diff_series[idx])
             effective_tol = self.EXTENDED_DATE_TOLERANCE_DAYS if name_sim >= 0.8 and amount_delta <= 2.0 else self.DATE_TOLERANCE_DAYS
             if int(date_diff[idx]) <= effective_tol:
                 filtered.append(idx)
                 name_scores[idx] = name_sim
+        
         if not filtered:
             return None, None
 
-        # ? wait we are iterating again? to store name_similarity_scores?
-        # ? i think this is redunandant and can be done in the previous for loop?
-        # ? are we finding the best row for the target row using a for loop ? than maybe i am wrong?
         pool = filtered
         if len(pool) < 2:
             return None, None
@@ -448,8 +443,6 @@ class ReconciliationEngine:
         if not candidate_idx_pool:
             return None
 
-        # ? copy() isn't just storing reference would be faster?
-        # ? does python even work like that? i mean in ref?
         candidates = candidate_df.loc[candidate_idx_pool]
         if candidates.empty:
             return None
@@ -466,21 +459,28 @@ class ReconciliationEngine:
 
         best_idx = None
         best_score = -float("inf")
+        target_amt_abs = abs(target_amount)
 
-        # ! Confused? wtf is this?
         for b_idx, bank_row in candidates.iterrows():
+            # Check amount first as it's cheapest filter
+            if amount_pct[b_idx] > self.AMOUNT_TOLERANCE_PERCENTAGE:
+                continue
+            
             name_sim = self._name_similarity(bank_row["normalized_name"], target_name)
             if name_sim < self.NAME_SIMILARITY_THRESHOLD:
                 continue
-            # ! what is this? so unreadable
+            
+            # Check date tolerance
             effective_tol = self.EXTENDED_DATE_TOLERANCE_DAYS if name_sim >= 0.8 and amount_diff[b_idx] <= 2.0 else self.DATE_TOLERANCE_DAYS
-            if int(date_diff[b_idx]) <= effective_tol and amount_pct[b_idx] <= self.AMOUNT_TOLERANCE_PERCENTAGE:
-                date_score = max(0.0, 1.0 - (date_diff[b_idx] / self.DATE_TOLERANCE_DAYS))
-                amount_score = max(0.0, 1.0 - (amount_diff[b_idx] / max(abs(target_amount), 1)))
-                score = 0.4 * name_sim + 0.35 * amount_score + 0.25 * date_score
-                if score > best_score:
-                    best_score = score
-                    best_idx = b_idx
+            if int(date_diff[b_idx]) > effective_tol:
+                continue
+            
+            date_score = max(0.0, 1.0 - (date_diff[b_idx] / self.DATE_TOLERANCE_DAYS))
+            amount_score = max(0.0, 1.0 - (amount_diff[b_idx] / max(target_amt_abs, 1)))
+            score = 0.4 * name_sim + 0.35 * amount_score + 0.25 * date_score
+            if score > best_score:
+                best_score = score
+                best_idx = b_idx
 
         return best_idx
 
