@@ -33,7 +33,6 @@ It is short, memorable, and reflects both:
 
 ---
 
-<!-- ADD DESIGN IMAGE -->
 ## Tech stack
 
 | Component | Technology |
@@ -54,6 +53,8 @@ It is short, memorable, and reflects both:
 
 ## Architecture
 
+![alt text](image.png)
+
 The application follows a containerized microservice-style deployment pattern:
 
 - Nginx receives incoming HTTP traffic and forwards it to the Django app instances
@@ -62,8 +63,6 @@ The application follows a containerized microservice-style deployment pattern:
 - Redis acts as the message broker and task backend
 - Groq LLM is used to enrich summaries and classifications
 - Prometheus and Grafana monitor system behavior during testing
-
----
 
 ## Project structure
 
@@ -280,7 +279,6 @@ curl -i http://localhost/jobs/25862/status/
 ```bash
 curl -i http://localhost/jobs/2862/result/
 ```
-<!-- DONE -->
 ## Data Model
 
 ### Job
@@ -301,20 +299,6 @@ status
 results (JSONField)
 ```
 
-## Production notes
-
-This setup is excellent for local testing and demonstration, but for a production-grade deployment you would likely add:
-
-- multiple Gunicorn workers behind a load balancer
-- more Celery workers
-- PostgreSQL connection pooling
-- structured logging and tracing
-- object storage for uploaded files
-- better retry and timeout policies for LLM calls
-- caching for repeated data queries
-
----
-
 ## Result
 
 ### Stress Test
@@ -322,13 +306,6 @@ This setup is excellent for local testing and demonstration, but for a productio
 ![Result of Stress Test by K6](k6-stress-test-result.png)
 ![Memory and CPU utilization by Stress Test](stress-test-memory-cpu-utilization.png)
 
-### Load Test
-![load test stages](load-test-stages.png)
-![load test k6 resultt](image-4.png)
-![load-test-trhougput-and-VUs](image-1.png)
-![load-test-CPU-utilization-relative-to-1-core](image-2.png)
-![load-test-memory-usage](image-3.png)
----
 
 ## Author
 

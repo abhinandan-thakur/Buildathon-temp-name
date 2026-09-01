@@ -665,6 +665,7 @@ def print_report(scores):
         )
 
     print("\n" + "=" * 70)
+    print("Cache stats:", ReconciliationEngine._name_similarity_cached.cache_info())
 
 def main():
     parser = argparse.ArgumentParser(description="Score the reconciliation engine against ground truth.")

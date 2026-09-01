@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 from pathlib import Path
 import os
+from kombu import Queue
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -101,7 +102,15 @@ DATABASES = {
         'PASSWORD': os.getenv('POSTGRES_PASSWORD'),
         'HOST': os.getenv('POSTGRES_HOST'),
         'PORT': os.getenv('POSTGRES_PORT'),
-        'CONN_MAX_AGE': 6000,
+        'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', '60')),
+    }
+}
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': os.getenv('DJANGO_CACHE_URL', 'redis://redis:6379/1'),
+        'TIMEOUT': 300,
     }
 }
 
@@ -142,8 +151,18 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
-CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL","redis://localhost:6379/0")
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/0")
 
-CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND","redis://localhost:6379/0")
+CELERY_TASK_DEFAULT_QUEUE = "reconcile"
+CELERY_TASK_QUEUES = (
+    Queue("default", routing_key="default.#"),
+    Queue("reconcile", routing_key="reconcile.#"),
+)
+CELERY_TASK_ROUTES = {
+    "jobs.tasks.process_job": {"queue": "reconcile", "routing_key": "reconcile.process_job"},
+}
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_TASK_ACKS_LATE = True
 
 MEDIA_ROOT = BASE_DIR / "uploads"

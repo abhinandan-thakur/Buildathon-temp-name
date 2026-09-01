@@ -59,41 +59,6 @@ class JobView(APIView):
 
         return Response({"job_id": job.id, "status": "pending"}, status=202)
 
-# class JobListView(APIView):
-#     def get(self, request):
-#         queryset = Job.objects.all()
-
-#         status_filter = request.query_params.get("status")
-
-#         if status_filter:
-#             queryset = queryset.filter(status=status_filter)
-
-#         page = int(request.query_params.get("page", 1))
-#         page_size = int(request.query_params.get("page_size", 20))
-
-#         start = (page - 1) * page_size
-#         end = start + page_size
-
-#         total = queryset.count()
-
-#         jobs = queryset.values(
-#             "id",
-#             "status",
-#             "bank_filename",
-#             "ledger_filename",
-#             "row_count_bank",
-#             "row_count_ledger",
-#             "match_rate",
-#             "created_at",
-#             "error",
-#         )[start:end]
-
-#         return Response({
-#             "count": total,
-#             "page": page,
-#             "page_size": page_size,
-#             "results": list(jobs)
-#         })
 
 # ! GO into depth on this one this can be imporved according to me i have done that weird caching before
 class JobListView(APIView):

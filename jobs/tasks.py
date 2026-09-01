@@ -5,7 +5,14 @@ from django.core.cache import cache
 # from .services import TransactionProcessor
 from .services import ReconciliationEngine
 
-@shared_task(bind=True, autoretry_for=(Exception,),retry_backoff=True,retry_kwargs={"max_retries":3})
+@shared_task(
+    bind=True,
+    queue='reconcile',
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 3},
+    acks_late=True,
+)
 def process_job(self, job_id):
     job = Job.objects.get(id=job_id)
     cacheKey = f"job_status:{job_id}"

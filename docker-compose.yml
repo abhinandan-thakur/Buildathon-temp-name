@@ -3,7 +3,7 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.28.0.0/16
+        - subnet: 172.30.0.0/16
 services:
   db:
     image: postgres:17
@@ -37,8 +37,7 @@ services:
     image: nginx:alpine
     container_name: nginx
     networks:
-      loadtest_net:
-        ipv4_address: 172.28.0.10
+      - loadtest_net
     ports:
       - "80:80"
       # ? wtf? what does nginx store?
@@ -75,7 +74,7 @@ services:
     networks:
       - default
       - loadtest_net
-    command: gunicorn AI_transaction_processing_pipeline.wsgi:application --bind 0.0.0.0:8001 --workers 4
+    command: gunicorn AI_transaction_processing_pipeline.wsgi:application --bind 0.0.0.0:8001 --workers 4 --threads 4 --worker-class gthread
     expose:
       - "8001"
     healthcheck:
@@ -104,7 +103,7 @@ services:
     networks:
       - default
       - loadtest_net
-    command: gunicorn AI_transaction_processing_pipeline.wsgi:application --bind 0.0.0.0:8001 --workers 4
+    command: gunicorn AI_transaction_processing_pipeline.wsgi:application --bind 0.0.0.0:8001 --workers 4 --threads 4 --worker-class gthread
     expose:
       - "8001"
     healthcheck:
@@ -133,7 +132,36 @@ services:
     networks:
       - default
       - loadtest_net
-    command: gunicorn AI_transaction_processing_pipeline.wsgi:application --bind 0.0.0.0:8001 --workers 4
+    command: gunicorn AI_transaction_processing_pipeline.wsgi:application --bind 0.0.0.0:8001 --workers 4 --threads 4 --worker-class gthread
+    expose:
+      - "8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/jobs/')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+  
+  web-4:
+    build: .
+    image: ai-transaction-pipeline
+    container_name: node-4
+    env_file:
+      - .env.docker
+    networks:
+      - default
+      - loadtest_net
+    command: gunicorn AI_transaction_processing_pipeline.wsgi:application --bind 0.0.0.0:8001 --workers 4 --threads 4 --worker-class gthread
     expose:
       - "8001"
     healthcheck:
@@ -159,24 +187,7 @@ services:
     container_name: celery-1
     env_file:
       - .env.docker
-    command: celery -A AI_transaction_processing_pipeline worker -l info -c 2
-    volumes:
-      - uploads_data:/app/uploads
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
-  celery-2:
-    build: .
-    image: ai-transaction-pipeline
-    container_name: celery-2
-    env_file:
-      - .env.docker
-    command: celery -A AI_transaction_processing_pipeline worker -l info -c 2
+    command: celery -A AI_transaction_processing_pipeline worker -l info -c 2 --prefetch-multiplier=1
     volumes:
       - uploads_data:/app/uploads
     depends_on:
@@ -191,9 +202,7 @@ services:
     image: grafana/k6
     container_name: stress-test-k6
     networks:
-      loadtest_net: {}
-    extra_hosts:
-      - "nginx:172.28.0.10"
+      - loadtest_net
     profiles:
       - stresstest
     volumes:
@@ -217,7 +226,7 @@ services:
     image: grafana/k6
     container_name: load-test-k6
     networks:
-      loadtest_net: {}
+      - loadtest_net
     profiles:
       - loadtest
     volumes:
