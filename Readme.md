@@ -1,10 +1,10 @@
-# LedgerLens AI
+# ReconciliationAI
 
 AI-powered financial reconciliation, anomaly detection, and reporting pipeline for bank and ledger CSV files.
 
 ## Overview
 
-LedgerLens AI processes uploaded bank and ledger CSV files asynchronously using Django REST Framework, Celery, Redis, PostgreSQL, Nginx, and Groq. The system normalizes transaction data, matches entries across both files, identifies unresolved exceptions, and returns a structured summary with AI-generated insights.
+ReconciliationAI processes uploaded bank and ledger CSV files asynchronously using Django REST Framework, Celery, Redis, PostgreSQL, Nginx, and Groq. The system normalizes transaction data, matches entries across both files, identifies unresolved exceptions, and returns a structured summary with AI-generated insights.
 
 This project is designed for reconciliation-heavy workflows where transaction records from different sources need to be compared, cleaned, and explained.
 
@@ -25,7 +25,7 @@ Modern finance teams often work with multiple data sources that do not share the
 
 ## Recommended project name
 
-Suggested name: LedgerLens AI
+Suggested name: ReconciliationAI
 
 It is short, memorable, and reflects both:
 - the financial ledger reconciliation use case
