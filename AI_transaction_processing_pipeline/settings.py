@@ -102,7 +102,10 @@ DATABASES = {
         'PASSWORD': os.getenv('POSTGRES_PASSWORD'),
         'HOST': os.getenv('POSTGRES_HOST'),
         'PORT': os.getenv('POSTGRES_PORT'),
-        'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', '60')),
+        'CONN_MAX_AGE': int(os.getenv('DB_CONN_MAX_AGE', '120')),
+        'OPTIONS': {
+            'options': '-c statement_timeout=30000',
+        },
     }
 }
 
@@ -153,6 +156,10 @@ STATIC_URL = 'static/'
 
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/0")
+CELERY_RESULT_EXPIRES = int(os.getenv("CELERY_RESULT_EXPIRES", "3600"))
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    "visibility_timeout": int(os.getenv("CELERY_VISIBILITY_TIMEOUT", "3600")),
+}
 
 CELERY_TASK_DEFAULT_QUEUE = "reconcile"
 CELERY_TASK_QUEUES = (
@@ -163,6 +170,11 @@ CELERY_TASK_ROUTES = {
     "jobs.tasks.process_job": {"queue": "reconcile", "routing_key": "reconcile.process_job"},
 }
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_WORKER_CONCURRENCY = int(os.getenv("CELERY_WORKER_CONCURRENCY", "3"))
+CELERY_WORKER_MAX_TASKS_PER_CHILD = int(os.getenv("CELERY_WORKER_MAX_TASKS_PER_CHILD", "1000"))
 CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+CELERY_TASK_TIME_LIMIT = int(os.getenv("CELERY_TASK_TIME_LIMIT", "600"))
+CELERY_TASK_SOFT_TIME_LIMIT = int(os.getenv("CELERY_TASK_SOFT_TIME_LIMIT", "540"))
 
 MEDIA_ROOT = BASE_DIR / "uploads"

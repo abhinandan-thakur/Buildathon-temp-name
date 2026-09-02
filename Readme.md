@@ -303,6 +303,7 @@ results (JSONField)
 
 ### Stress Test
 ![Stress Test Stages](stress-test-stages.png)
+![alt text](image-5.png)
 ![Result of Stress Test by K6](k6-stress-test-result.png)
 ![Memory and CPU utilization by Stress Test](stress-test-memory-cpu-utilization.png)
 

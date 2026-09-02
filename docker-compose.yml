@@ -187,7 +187,7 @@ services:
     container_name: celery-1
     env_file:
       - .env.docker
-    command: celery -A AI_transaction_processing_pipeline worker -l info -c 2 --prefetch-multiplier=1
+    command: celery -A AI_transaction_processing_pipeline worker -l info -c ${CELERY_WORKER_CONCURRENCY:-3} --prefetch-multiplier=1 --max-tasks-per-child=1000
     volumes:
       - uploads_data:/app/uploads
     depends_on:
